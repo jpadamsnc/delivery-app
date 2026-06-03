@@ -1,19 +1,26 @@
 import Papa from 'papaparse';
 import _ from 'lodash';
 
-export const parseCSV = (file) => {
+export const parseCsvText = (text) => {
   return new Promise((resolve, reject) => {
-    Papa.parse(file, {
+    Papa.parse(text, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        if (results.errors.length > 0) {
-          console.error('CSV Parse Errors:', results.errors);
-        }
+        if (results.errors.length > 0) console.error('CSV Parse Errors:', results.errors);
         resolve(results.data);
       },
       error: (error) => reject(error),
     });
+  });
+};
+
+export const parseCSV = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => parseCsvText(e.target.result).then(resolve).catch(reject);
+    reader.onerror = reject;
+    reader.readAsText(file);
   });
 };
 

@@ -22,8 +22,21 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   const [depotCoords, setDepotCoords] = useState(null);
   const [depotLabel, setDepotLabel] = useState('');
   const [numDrivers, setNumDrivers] = useState(1);
-  const [copiedDriverId, setCopiedDriverId]       = useState(null);
-  const [activeDriverView, setActiveDriverView]   = useState(null); // vehicleId or null
+  const [copiedDriverId,   setCopiedDriverId]   = useState(null);
+  const [activeDriverView, setActiveDriverView] = useState(null);
+  const [driverNames,      setDriverNames]      = useState(() => {
+    try { return JSON.parse(localStorage.getItem('deliveryDriverNames') || '[]'); }
+    catch { return []; }
+  });
+
+  const updateDriverName = (vehicleId, name) => {
+    setDriverNames(prev => {
+      const next = [...prev];
+      next[vehicleId - 1] = name;
+      localStorage.setItem('deliveryDriverNames', JSON.stringify(next));
+      return next;
+    });
+  };
   const [geocoding, setGeocoding] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState(null);
@@ -269,11 +282,16 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                     className="flex items-center justify-between px-4 py-2.5"
                     style={{ borderLeft: `4px solid ${color}` }}
                   >
-                    <div>
-                      <span className="font-semibold text-sm" style={{ color }}>
-                        {getDriverName(route.vehicleId)}
-                      </span>
-                      <span className="text-gray-500 text-xs ml-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <input
+                        type="text"
+                        value={driverNames[route.vehicleId - 1] || ''}
+                        onChange={e => updateDriverName(route.vehicleId, e.target.value)}
+                        placeholder={`Driver ${route.vehicleId} name`}
+                        className="text-sm font-semibold bg-transparent border-b border-dashed focus:outline-none focus:border-solid w-28"
+                        style={{ color, borderColor: color }}
+                      />
+                      <span className="text-gray-500 text-xs">
                         {route.stops.length} stops ·{' '}
                         {formatDistance(route.summary.distance)} ·{' '}
                         {formatDuration(route.summary.duration)}
