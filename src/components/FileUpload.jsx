@@ -27,7 +27,7 @@ const FileUpload = ({ onFileUpload }) => {
             <input
                 type="file"
                 id="fileInput"
-                accept=".csv"
+                accept=".csv,text/csv,text/plain,application/csv,application/vnd.ms-excel"
                 onChange={handleChange}
                 onClick={(e) => e.stopPropagation()}
                 className="hidden"
