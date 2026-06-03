@@ -388,15 +388,20 @@ const DriverView = ({ route, driverColor, onClose }) => {
               Completed ({completedStops.length})
             </div>
             {completedStops.map((stop) => (
-              <div key={stop.order.orderId} className="bg-white rounded-xl border border-gray-100 p-4 mb-3 opacity-50">
-                <div className="flex items-center gap-3">
-                  <button onClick={() => toggleComplete(stop.order.orderId)}>
-                    <CheckCircle size={24} className="text-green-500" />
-                  </button>
-                  <div>
+              <div key={stop.order.orderId} className="bg-white rounded-xl border border-gray-100 overflow-hidden mb-3 opacity-60">
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <CheckCircle size={22} className="text-green-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
                     <div className="font-medium text-gray-600 line-through">{stop.order.customerName}</div>
                     <div className="text-xs text-gray-400">{stop.order.street}, {stop.order.city}</div>
                   </div>
+                  <button
+                    onClick={() => toggleComplete(stop.order.orderId)}
+                    className="flex-shrink-0 flex items-center gap-1 text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 hover:bg-orange-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                  >
+                    <RotateCcw size={12} />
+                    Undo
+                  </button>
                 </div>
               </div>
             ))}
