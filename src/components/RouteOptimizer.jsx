@@ -1,5 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck, Truck, Share2 } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  MapPin, Navigation, Printer, AlertCircle, CheckCircle,
+  Loader, Copy, ClipboardCheck, Truck, Share2, ArrowRight, RefreshCw,
+} from 'lucide-react';
 import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
 import RouteMap from './RouteMap';
@@ -19,10 +22,18 @@ function formatDistance(meters) {
 }
 
 const RouteOptimizer = ({ labelData, onPrintLabels }) => {
-  const [depotAddress, setDepotAddress] = useState(() => localStorage.getItem(DEPOT_STORAGE_KEY) || '');
-  const [depotCoords, setDepotCoords] = useState(null);
-  const [depotLabel, setDepotLabel] = useState('');
-  const [numDrivers, setNumDrivers] = useState(1);
+  const [depotAddress,     setDepotAddress]     = useState(() => localStorage.getItem(DEPOT_STORAGE_KEY) || '');
+  const [depotCoords,      setDepotCoords]      = useState(null);
+  const [depotLabel,       setDepotLabel]       = useState('');
+  const [numDrivers,       setNumDrivers]       = useState(1);
+  const [geocoding,        setGeocoding]        = useState(false);
+  const [optimizing,       setOptimizing]       = useState(false);
+  const [reoptimizing,     setReoptimizing]     = useState(false);
+  const [error,            setError]            = useState(null);
+  const [routes,           setRoutes]           = useState(null);   // drives the map
+  const [editedRoutes,     setEditedRoutes]     = useState(null);   // drives the stop list UI
+  const [isManuallyEdited, setIsManuallyEdited] = useState(false);
+  const [polylines,        setPolylines]        = useState(null);
   const [copiedDriverId,   setCopiedDriverId]   = useState(null);
   const [sharedDriverId,   setSharedDriverId]   = useState(null);
   const [activeDriverView, setActiveDriverView] = useState(null);
@@ -39,12 +50,21 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       return next;
     });
   };
-  const [geocoding, setGeocoding] = useState(false);
-  const [optimizing, setOptimizing] = useState(false);
-  const [error, setError] = useState(null);
-  const [routes, setRoutes] = useState(null);
-  const [polylines, setPolylines] = useState(null);
 
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  const buildPolylines = async (routeList) => {
+    return Promise.all(routeList.map(route => {
+      if (!route.stops.length) return Promise.resolve([]);
+      const waypoints = [
+        [depotCoords.lon, depotCoords.lat],
+        ...route.stops.map(s => [parseFloat(s.order.lon), parseFloat(s.order.lat)]),
+        [depotCoords.lon, depotCoords.lat],
+      ];
+      return getRoutePolyline(waypoints);
+    }));
+  };
+
+  // ── Initial optimization ──────────────────────────────────────────────────
   const handleSetDepot = async () => {
     if (!depotAddress.trim()) return;
     setGeocoding(true);
@@ -67,46 +87,24 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     setOptimizing(true);
     setError(null);
     setRoutes(null);
+    setEditedRoutes(null);
     setPolylines(null);
+    setIsManuallyEdited(false);
 
     try {
       const result = await optimizeRoute(depotCoords, labelData, numDrivers);
-
-      // Build processed routes
-      const processed = result.routes.map((r) => {
-        const jobSteps = r.steps.filter((s) => s.type === 'job');
+      const processed = result.routes.map(r => {
+        const jobSteps = r.steps.filter(s => s.type === 'job');
         const stops = jobSteps
-          .map((step) => ({
-            order: labelData[step.id - 1],
-            stopNum: step.arrival,
-          }))
-          .filter((stop) => stop.order != null);
-        // ORS may return stats directly on the route or nested in summary
-        const summary = r.summary ?? {
-          duration: r.duration ?? 0,
-          distance: r.distance ?? 0,
-        };
-        return {
-          vehicleId: r.vehicle,
-          stops,
-          summary,
-        };
+          .map(step => ({ order: labelData[step.id - 1], stopNum: step.arrival }))
+          .filter(s => s.order != null);
+        const summary = r.summary ?? { duration: r.duration ?? 0, distance: r.distance ?? 0 };
+        return { vehicleId: r.vehicle, stops, summary };
       });
 
       setRoutes(processed);
-
-      // Fetch road polylines for each route
-      const polylineResults = await Promise.all(
-        processed.map((route) => {
-          const waypoints = [
-            [depotCoords.lon, depotCoords.lat],
-            ...route.stops.map((s) => [parseFloat(s.order.lon), parseFloat(s.order.lat)]),
-            [depotCoords.lon, depotCoords.lat],
-          ];
-          return getRoutePolyline(waypoints);
-        })
-      );
-      setPolylines(polylineResults);
+      setEditedRoutes(processed);
+      setPolylines(await buildPolylines(processed));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -114,32 +112,88 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     }
   };
 
-  const handleCopyRoute = (route) => {
-    const stops = route.stops;
+  // ── Manual stop reassignment ──────────────────────────────────────────────
+  const moveStop = (fromVehicleId, orderId) => {
+    setEditedRoutes(prev => {
+      const next = prev.map(r => ({ ...r, stops: [...r.stops] }));
+      const from = next.find(r => r.vehicleId === fromVehicleId);
+      const to   = next.find(r => r.vehicleId !== fromVehicleId);
+      if (!from || !to) return prev;
+      const idx = from.stops.findIndex(s => s.order.orderId === orderId);
+      if (idx === -1) return prev;
+      const [moved] = from.stops.splice(idx, 1);
+      to.stops.push(moved);
+      return next;
+    });
+    // Update map markers immediately (without re-routing polylines)
+    setRoutes(prev => {
+      if (!prev) return prev;
+      const next = prev.map(r => ({ ...r, stops: [...r.stops] }));
+      const from = next.find(r => r.vehicleId === fromVehicleId);
+      const to   = next.find(r => r.vehicleId !== fromVehicleId);
+      if (!from || !to) return prev;
+      const idx = from.stops.findIndex(s => s.order.orderId === orderId);
+      if (idx === -1) return prev;
+      const [moved] = from.stops.splice(idx, 1);
+      to.stops.push(moved);
+      return next;
+    });
+    setPolylines(null); // polylines are stale until re-optimized
+    setIsManuallyEdited(true);
+  };
 
-    // Google Maps URL — origin & destination = depot, waypoints = stops in order
-    // GM supports up to 8 intermediate waypoints; if more, use the first 8
-    const waypoints = stops
-      .slice(0, 8)
-      .map((s) => `${s.order.lat},${s.order.lon}`)
-      .join('|');
+  // ── Re-optimize each driver's current stops independently ─────────────────
+  const handleReoptimize = async () => {
+    if (!depotCoords || !editedRoutes) return;
+    setReoptimizing(true);
+    setError(null);
+    try {
+      const newRoutes = await Promise.all(
+        editedRoutes.map(async route => {
+          if (route.stops.length <= 1) {
+            return { ...route, summary: { distance: 0, duration: 0 } };
+          }
+          const orders = route.stops.map(s => s.order);
+          const result = await optimizeRoute(depotCoords, orders, 1);
+          const jobSteps = result.routes[0].steps.filter(s => s.type === 'job');
+          const reordered = jobSteps
+            .map(step => ({ order: orders[step.id - 1] }))
+            .filter(s => s.order != null);
+          const summary = result.routes[0].summary ?? {
+            duration: result.routes[0].duration ?? 0,
+            distance: result.routes[0].distance ?? 0,
+          };
+          return { ...route, stops: reordered, summary };
+        })
+      );
+
+      setEditedRoutes(newRoutes);
+      setRoutes(newRoutes);
+      setPolylines(await buildPolylines(newRoutes));
+      setIsManuallyEdited(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setReoptimizing(false);
+    }
+  };
+
+  // ── Action buttons ────────────────────────────────────────────────────────
+  const handleCopyRoute = (route) => {
+    const waypoints = route.stops.slice(0, 8).map(s => `${s.order.lat},${s.order.lon}`).join('|');
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
       `&origin=${depotCoords.lat},${depotCoords.lon}` +
       `&destination=${depotCoords.lat},${depotCoords.lon}` +
-      `&waypoints=${waypoints}` +
-      `&travelmode=driving`;
-
-    const stopLines = stops
-      .map((s, idx) => `${idx + 1}. ${s.order.customerName} — ${s.order.street}, ${s.order.city}`)
+      `&waypoints=${waypoints}&travelmode=driving`;
+    const stopLines = route.stops
+      .map((s, i) => `${i + 1}. ${s.order.customerName} — ${s.order.street}, ${s.order.city}`)
       .join('\n');
-
+    const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
     const message =
-      `Driver ${route.vehicleId} — ${stops.length} stop${stops.length !== 1 ? 's' : ''}` +
+      `${driverName} — ${route.stops.length} stop${route.stops.length !== 1 ? 's' : ''}` +
       ` (${formatDistance(route.summary.distance)} / ${formatDuration(route.summary.duration)})\n\n` +
-      `${stopLines}\n\n` +
-      `Navigate all stops:\n${mapsUrl}`;
-
+      `${stopLines}\n\nNavigate all stops:\n${mapsUrl}`;
     navigator.clipboard.writeText(message).then(() => {
       setCopiedDriverId(route.vehicleId);
       setTimeout(() => setCopiedDriverId(null), 2500);
@@ -147,9 +201,9 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   const handleShareDriver = (route) => {
-    const name = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+    const name     = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
     const farmName = localStorage.getItem('deliveryFarmName') || 'Fuster Cluck Farm';
-    const url = encodeDriverLink(route, name, farmName);
+    const url      = encodeDriverLink(route, name, farmName);
     navigator.clipboard.writeText(url).then(() => {
       setSharedDriverId(route.vehicleId);
       setTimeout(() => setSharedDriverId(null), 2500);
@@ -157,56 +211,48 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   const handlePrintDriver = (route) => {
-    const ordered = route.stops.map((stop, idx) => ({
+    onPrintLabels(route.stops.map((stop, idx) => ({
       ...stop.order,
-      driverInfo: {
-        driverNum: route.vehicleId,
-        stopNum: idx + 1,
-        totalStops: route.stops.length,
-      },
-    }));
-    onPrintLabels(ordered);
+      driverInfo: { driverNum: route.vehicleId, stopNum: idx + 1, totalStops: route.stops.length },
+    })));
   };
 
   const handlePrintAll = () => {
-    if (!routes) return;
-    const allLabels = routes.flatMap((route) =>
+    if (!editedRoutes) return;
+    onPrintLabels(editedRoutes.flatMap(route =>
       route.stops.map((stop, idx) => ({
         ...stop.order,
-        driverInfo: {
-          driverNum: route.vehicleId,
-          stopNum: idx + 1,
-          totalStops: route.stops.length,
-        },
+        driverInfo: { driverNum: route.vehicleId, stopNum: idx + 1, totalStops: route.stops.length },
       }))
-    );
-    onPrintLabels(allLabels);
+    ));
   };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  const displayRoutes = editedRoutes ?? routes;
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-full">
-      {/* Left panel: controls + stop lists */}
+      {/* Left panel */}
       <div className="w-full lg:w-96 flex-shrink-0 space-y-4 overflow-y-auto">
 
-        {/* Depot setup */}
+        {/* Depot */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-            <MapPin size={16} className="text-gray-500" />
-            Start / End Depot
+            <MapPin size={16} className="text-gray-500" /> Start / End Depot
           </h3>
           <div className="flex gap-2">
             <input
               type="text"
               value={depotAddress}
-              onChange={(e) => setDepotAddress(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSetDepot()}
+              onChange={e => setDepotAddress(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSetDepot()}
               placeholder="123 Farm Rd, City, NC 27000"
               className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
             />
             <button
               onClick={handleSetDepot}
               disabled={!depotAddress.trim() || geocoding}
-              className="px-3 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+              className="px-3 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-black disabled:opacity-40 flex items-center gap-1"
             >
               {geocoding ? <Loader size={14} className="animate-spin" /> : 'Set'}
             </button>
@@ -222,14 +268,11 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         {/* Driver count */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-            <Navigation size={16} className="text-gray-500" />
-            Number of Drivers
+            <Navigation size={16} className="text-gray-500" /> Number of Drivers
           </h3>
           <div className="flex gap-2">
-            {[1, 2].map((n) => (
-              <button
-                key={n}
-                onClick={() => setNumDrivers(n)}
+            {[1, 2].map(n => (
+              <button key={n} onClick={() => setNumDrivers(n)}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${
                   numDrivers === n
                     ? 'border-blue-500 bg-blue-50 text-blue-700'
@@ -246,19 +289,11 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         <button
           onClick={handleOptimize}
           disabled={!depotCoords || !labelData?.length || optimizing}
-          className="w-full py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm transition-all"
+          className="w-full py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-40 flex items-center justify-center gap-2 shadow-sm transition-all"
         >
-          {optimizing ? (
-            <>
-              <Loader size={18} className="animate-spin" />
-              Optimizing…
-            </>
-          ) : (
-            <>
-              <Navigation size={18} />
-              Optimize Route{numDrivers > 1 ? 's' : ''}
-            </>
-          )}
+          {optimizing
+            ? <><Loader size={18} className="animate-spin" /> Optimizing…</>
+            : <><Navigation size={18} /> Optimize Route{numDrivers > 1 ? 's' : ''}</>}
         </button>
 
         {/* Error */}
@@ -270,30 +305,50 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         )}
 
         {/* Route results */}
-        {routes && (
+        {displayRoutes && (
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-sm font-semibold text-gray-700">Optimized Routes</span>
-              {routes.length > 1 && (
-                <button
-                  onClick={handlePrintAll}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700"
-                >
-                  <Printer size={13} />
-                  Print All
-                </button>
-              )}
+              <div className="flex gap-1.5">
+                {/* Re-optimize after manual edits */}
+                {isManuallyEdited && (
+                  <button
+                    onClick={handleReoptimize}
+                    disabled={reoptimizing}
+                    className="flex items-center gap-1 text-xs px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
+                    title="Re-optimize stop order for each driver based on their current assignment"
+                  >
+                    {reoptimizing
+                      ? <><Loader size={12} className="animate-spin" /> Optimizing…</>
+                      : <><RefreshCw size={12} /> Re-optimize Order</>}
+                  </button>
+                )}
+                {displayRoutes.length > 1 && (
+                  <button onClick={handlePrintAll}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700"
+                  >
+                    <Printer size={13} /> Print All
+                  </button>
+                )}
+              </div>
             </div>
 
-            {routes.map((route) => {
-              const color = DRIVER_COLORS[(route.vehicleId - 1) % DRIVER_COLORS.length];
+            {isManuallyEdited && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Stops have been manually reassigned. Click <strong>Re-optimize Order</strong> to find the best sequence for each driver.
+              </p>
+            )}
+
+            {displayRoutes.map(route => {
+              const color      = DRIVER_COLORS[(route.vehicleId - 1) % DRIVER_COLORS.length];
+              const otherRoute = displayRoutes.find(r => r.vehicleId !== route.vehicleId);
+
               return (
                 <div key={route.vehicleId} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+
                   {/* Driver header */}
-                  <div
-                    className="flex items-center justify-between px-4 py-2.5"
-                    style={{ borderLeft: `4px solid ${color}` }}
-                  >
+                  <div className="flex items-center justify-between px-4 py-2.5"
+                    style={{ borderLeft: `4px solid ${color}` }}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <input
                         type="text"
@@ -304,52 +359,46 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                         style={{ color, borderColor: color }}
                       />
                       <span className="text-gray-500 text-xs">
-                        {route.stops.length} stops ·{' '}
-                        {formatDistance(route.summary.distance)} ·{' '}
-                        {formatDuration(route.summary.duration)}
+                        {route.stops.length} stops
+                        {route.summary.distance > 0 && ` · ${formatDistance(route.summary.distance)}`}
+                        {route.summary.duration > 0 && ` · ${formatDuration(route.summary.duration)}`}
+                        {isManuallyEdited && <span className="text-amber-500"> *</span>}
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                      <button
-                        onClick={() => handleShareDriver(route)}
+                      <button onClick={() => handleShareDriver(route)}
                         className={`flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg transition-all font-medium ${
                           sharedDriverId === route.vehicleId
                             ? 'border-green-400 bg-green-50 text-green-700'
                             : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
                         }`}
-                        title="Copy a link to send to the driver — opens their route directly on their phone"
+                        title="Copy link to send to driver — opens Driver View on their phone"
                       >
                         {sharedDriverId === route.vehicleId
                           ? <><ClipboardCheck size={12} /> Copied!</>
                           : <><Share2 size={12} /> Driver Link</>}
                       </button>
-                      <button
-                        onClick={() => handleCopyRoute(route)}
+                      <button onClick={() => handleCopyRoute(route)}
                         className={`flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg transition-all ${
                           copiedDriverId === route.vehicleId
                             ? 'border-green-400 bg-green-50 text-green-700'
                             : 'border-gray-200 hover:bg-gray-50 text-gray-600'
                         }`}
-                        title="Copy a text message with Google Maps link"
                       >
                         {copiedDriverId === route.vehicleId
                           ? <><ClipboardCheck size={12} /> Copied!</>
                           : <><Copy size={12} /> Copy Route</>}
                       </button>
-                      <button
-                        onClick={() => handlePrintDriver(route)}
+                      <button onClick={() => handlePrintDriver(route)}
                         className="flex items-center gap-1 text-xs px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600"
                       >
-                        <Printer size={12} />
-                        Labels
+                        <Printer size={12} /> Labels
                       </button>
-                      <button
-                        onClick={() => setActiveDriverView(route.vehicleId)}
+                      <button onClick={() => setActiveDriverView(route.vehicleId)}
                         className="flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg text-white font-medium"
                         style={{ background: color, borderColor: color }}
                       >
-                        <Truck size={12} />
-                        Drive
+                        <Truck size={12} /> Drive
                       </button>
                     </div>
                   </div>
@@ -357,14 +406,12 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                   {/* Stop list */}
                   <ol className="divide-y divide-gray-50">
                     {route.stops.map((stop, idx) => (
-                      <li key={stop.order.orderId} className="flex items-start gap-2 px-4 py-2">
-                        <span
-                          className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center"
-                          style={{ background: color }}
-                        >
+                      <li key={stop.order.orderId} className="flex items-center gap-2 px-4 py-2">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center"
+                          style={{ background: color }}>
                           {idx + 1}
                         </span>
-                        <div className="min-w-0">
+                        <div className="flex-1 min-w-0">
                           <div className="text-xs font-medium text-gray-800 truncate">
                             {stop.order.customerName}
                           </div>
@@ -372,6 +419,18 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                             {stop.order.street}, {stop.order.city}
                           </div>
                         </div>
+                        {/* Move to other driver button — only shown with 2 drivers */}
+                        {otherRoute && (
+                          <button
+                            onClick={() => moveStop(route.vehicleId, stop.order.orderId)}
+                            className="flex-shrink-0 flex items-center gap-0.5 text-[10px] font-medium px-2 py-1 rounded border border-gray-200 hover:border-gray-400 hover:bg-gray-50 text-gray-500 transition-all"
+                            title={`Move to ${driverNames[(otherRoute.vehicleId - 1)] || `Driver ${otherRoute.vehicleId}`}`}
+                            style={{ '--tw-border-opacity': 1 }}
+                          >
+                            <ArrowRight size={10} />
+                            {driverNames[(otherRoute.vehicleId - 1)] || `Driver ${otherRoute.vehicleId}`}
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ol>
@@ -382,21 +441,17 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         )}
       </div>
 
-      {/* Right panel: map */}
+      {/* Map */}
       <div className="flex-1" style={{ minHeight: '500px' }}>
         <RouteMap depot={depotCoords} routes={routes} polylines={polylines} />
       </div>
 
       {/* Driver view overlay */}
-      {activeDriverView && routes && (() => {
-        const route = routes.find(r => r.vehicleId === activeDriverView);
+      {activeDriverView && displayRoutes && (() => {
+        const route = displayRoutes.find(r => r.vehicleId === activeDriverView);
         const color = DRIVER_COLORS[(activeDriverView - 1) % DRIVER_COLORS.length];
         return route ? (
-          <DriverView
-            route={route}
-            driverColor={color}
-            onClose={() => setActiveDriverView(null)}
-          />
+          <DriverView route={route} driverColor={color} onClose={() => setActiveDriverView(null)} />
         ) : null;
       })()}
     </div>
