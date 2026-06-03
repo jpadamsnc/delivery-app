@@ -13,9 +13,9 @@ export async function geocodeAddress(address) {
 }
 
 export async function optimizeRoute(depot, orders, numVehicles) {
-  // When using multiple vehicles, cap each one at ceil(N/numVehicles) stops so
-  // VROOM is forced to distribute jobs rather than pile them all on one driver.
-  const capacityPerVehicle = Math.ceil(orders.length / numVehicles);
+  // max_tasks caps stops per vehicle so VROOM must distribute them,
+  // while still being free to minimise total drive duration across both routes.
+  const maxTasks = numVehicles > 1 ? Math.ceil(orders.length / numVehicles) : undefined;
 
   const vehicles = Array.from({ length: numVehicles }, (_, i) => {
     const v = {
@@ -24,19 +24,15 @@ export async function optimizeRoute(depot, orders, numVehicles) {
       start: [depot.lon, depot.lat],
       end: [depot.lon, depot.lat],
     };
-    if (numVehicles > 1) v.capacity = [capacityPerVehicle];
+    if (maxTasks) v.max_tasks = maxTasks;
     return v;
   });
 
-  const jobs = orders.map((order, i) => {
-    const j = {
-      id: i + 1,
-      location: [parseFloat(order.lon), parseFloat(order.lat)],
-      description: order.customerName,
-    };
-    if (numVehicles > 1) j.delivery = [1];
-    return j;
-  });
+  const jobs = orders.map((order, i) => ({
+    id: i + 1,
+    location: [parseFloat(order.lon), parseFloat(order.lat)],
+    description: order.customerName,
+  }));
 
   const res = await fetch(`${BASE}/optimization`, {
     method: 'POST',
