@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck, Truck } from 'lucide-react';
 import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
 import RouteMap from './RouteMap';
-import DriverView from './DriverView';
+import DriverView, { getDriverName } from './DriverView';
 
 const DRIVER_COLORS = ['#2563EB', '#EA580C'];
 const DEPOT_STORAGE_KEY = 'deliveryDepotAddress';
@@ -271,7 +271,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                   >
                     <div>
                       <span className="font-semibold text-sm" style={{ color }}>
-                        Driver {route.vehicleId}
+                        {getDriverName(route.vehicleId)}
                       </span>
                       <span className="text-gray-500 text-xs ml-2">
                         {route.stops.length} stops ·{' '}

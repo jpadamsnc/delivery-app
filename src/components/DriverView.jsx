@@ -20,9 +20,17 @@ const DEFAULT_ETA_TEMPLATE =
 const DEFAULT_THANKS_TEMPLATE =
   `Hi {firstName}! Your {farmName} order has been delivered. Thank you so much for your support! 🐔`;
 
-const STORAGE_ETA    = 'deliveryEtaTemplate';
-const STORAGE_THANKS = 'deliveryThanksTemplate';
-const STORAGE_FARM   = 'deliveryFarmName';
+const STORAGE_ETA     = 'deliveryEtaTemplate';
+const STORAGE_THANKS  = 'deliveryThanksTemplate';
+const STORAGE_FARM    = 'deliveryFarmName';
+const STORAGE_DRIVERS = 'deliveryDriverNames'; // JSON array ["Jim","Carol"]
+
+export function getDriverName(vehicleId) {
+  try {
+    const names = JSON.parse(localStorage.getItem(STORAGE_DRIVERS) || '[]');
+    return names[vehicleId - 1] || `Driver ${vehicleId}`;
+  } catch { return `Driver ${vehicleId}`; }
+}
 
 const DEFAULT_FARM = 'Fuster Cluck Farm';
 
@@ -37,11 +45,12 @@ function smsLink(phone, body) {
 
 function applyTemplate(template, vars) {
   return template
-    .replace(/\{firstName\}/g,  vars.firstName  ?? '')
-    .replace(/\{farmName\}/g,   vars.farmName   ?? '')
-    .replace(/\{stopsAway\}/g,  vars.stopsAway  ?? '')
-    .replace(/\{stopsWord\}/g,  vars.stopsWord  ?? '')
-    .replace(/\{etaTime\}/g,    vars.etaTime    ?? '');
+    .replace(/\{firstName\}/g,   vars.firstName   ?? '')
+    .replace(/\{farmName\}/g,    vars.farmName    ?? '')
+    .replace(/\{driverName\}/g,  vars.driverName  ?? '')
+    .replace(/\{stopsAway\}/g,   vars.stopsAway   ?? '')
+    .replace(/\{stopsWord\}/g,   vars.stopsWord   ?? '')
+    .replace(/\{etaTime\}/g,     vars.etaTime     ?? '');
 }
 
 function formatArrivalTime(date) {
@@ -49,13 +58,20 @@ function formatArrivalTime(date) {
 }
 
 // ─── Template Editor Modal ────────────────────────────────────────────────────
-const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose }) => {
-  const [farm,   setFarm]   = useState(farmName);
-  const [eta,    setEta]    = useState(etaTemplate);
-  const [thanks, setThanks] = useState(thanksTemplate);
+const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, driverNames, onSave, onClose }) => {
+  const [farm,    setFarm]    = useState(farmName);
+  const [eta,     setEta]     = useState(etaTemplate);
+  const [thanks,  setThanks]  = useState(thanksTemplate);
+  const [drivers, setDrivers] = useState(driverNames);
+
+  const setDriver = (idx, val) => setDrivers(prev => {
+    const next = [...prev];
+    next[idx] = val;
+    return next;
+  });
 
   const handleSave = () => {
-    onSave({ farmName: farm.trim() || DEFAULT_FARM, etaTemplate: eta, thanksTemplate: thanks });
+    onSave({ farmName: farm.trim() || DEFAULT_FARM, etaTemplate: eta, thanksTemplate: thanks, driverNames: drivers });
     onClose();
   };
 
@@ -82,6 +98,24 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose
             />
           </div>
 
+          {/* Driver names */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Driver Names</label>
+            <div className="flex gap-2">
+              {[0, 1].map(i => (
+                <input
+                  key={i}
+                  type="text"
+                  value={drivers[i] || ''}
+                  onChange={e => setDriver(i, e.target.value)}
+                  placeholder={`Driver ${i + 1} (e.g. ${i === 0 ? 'Jim' : 'Carol'})`}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">Use <code className="bg-gray-100 px-1 rounded">{'{driverName}'}</code> in templates to include the driver's name.</p>
+          </div>
+
           {/* ETA template */}
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -102,6 +136,7 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose
             <p className="text-xs text-gray-400 mt-1">
               Placeholders: <code className="bg-gray-100 px-1 rounded">{'{firstName}'}</code>{' '}
               <code className="bg-gray-100 px-1 rounded">{'{farmName}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{driverName}'}</code>{' '}
               <code className="bg-gray-100 px-1 rounded">{'{stopsAway}'}</code>{' '}
               <code className="bg-gray-100 px-1 rounded">{'{stopsWord}'}</code>{' '}
               <code className="bg-gray-100 px-1 rounded">{'{etaTime}'}</code>
@@ -127,7 +162,8 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose
             />
             <p className="text-xs text-gray-400 mt-1">
               Placeholders: <code className="bg-gray-100 px-1 rounded">{'{firstName}'}</code>{' '}
-              <code className="bg-gray-100 px-1 rounded">{'{farmName}'}</code>
+              <code className="bg-gray-100 px-1 rounded">{'{farmName}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{driverName}'}</code>
             </p>
           </div>
         </div>
@@ -152,14 +188,18 @@ const DriverView = ({ route, driverColor, onClose }) => {
   const [etaLoadingId,  setEtaLoadingId]  = useState(null);
   const [showSettings,  setShowSettings]  = useState(false);
 
-  const [farmName,      setFarmName]      = useState(() => localStorage.getItem(STORAGE_FARM)   || DEFAULT_FARM);
-  const [etaTemplate,   setEtaTemplate]   = useState(() => localStorage.getItem(STORAGE_ETA)    || DEFAULT_ETA_TEMPLATE);
-  const [thanksTemplate,setThanksTemplate]= useState(() => localStorage.getItem(STORAGE_THANKS) || DEFAULT_THANKS_TEMPLATE);
+  const [farmName,       setFarmName]       = useState(() => localStorage.getItem(STORAGE_FARM)   || DEFAULT_FARM);
+  const [etaTemplate,    setEtaTemplate]    = useState(() => localStorage.getItem(STORAGE_ETA)    || DEFAULT_ETA_TEMPLATE);
+  const [thanksTemplate, setThanksTemplate] = useState(() => localStorage.getItem(STORAGE_THANKS) || DEFAULT_THANKS_TEMPLATE);
+  const [driverNames,    setDriverNames]    = useState(() => { try { return JSON.parse(localStorage.getItem(STORAGE_DRIVERS) || '[]'); } catch { return []; } });
 
-  const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t }) => {
-    setFarmName(f);      localStorage.setItem(STORAGE_FARM,   f);
-    setEtaTemplate(e);   localStorage.setItem(STORAGE_ETA,    e);
-    setThanksTemplate(t);localStorage.setItem(STORAGE_THANKS, t);
+  const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+
+  const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t, driverNames: d }) => {
+    setFarmName(f);        localStorage.setItem(STORAGE_FARM,    f);
+    setEtaTemplate(e);     localStorage.setItem(STORAGE_ETA,     e);
+    setThanksTemplate(t);  localStorage.setItem(STORAGE_THANKS,  t);
+    setDriverNames(d);     localStorage.setItem(STORAGE_DRIVERS, JSON.stringify(d));
   };
 
   const toggleComplete = (orderId) => {
@@ -216,6 +256,7 @@ const DriverView = ({ route, driverColor, onClose }) => {
     const body = applyTemplate(etaTemplate, {
       firstName,
       farmName,
+      driverName,
       stopsAway,
       stopsWord: stopsAway === 1 ? 'stop' : 'stops',
       etaTime,
@@ -226,7 +267,7 @@ const DriverView = ({ route, driverColor, onClose }) => {
 
   const buildThanks = (order) => {
     const firstName = (order.customerName || '').split(' ')[0];
-    return smsLink(order.phone, applyTemplate(thanksTemplate, { firstName, farmName }));
+    return smsLink(order.phone, applyTemplate(thanksTemplate, { firstName, farmName, driverName }));
   };
 
   return (
@@ -236,7 +277,7 @@ const DriverView = ({ route, driverColor, onClose }) => {
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 shadow-sm flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: driverColor }} />
-          <span className="font-bold text-gray-900">Driver {route.vehicleId} Route</span>
+          <span className="font-bold text-gray-900">{driverName}'s Route</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">{completedStops.length}/{route.stops.length} done</span>
@@ -418,6 +459,7 @@ const DriverView = ({ route, driverColor, onClose }) => {
           farmName={farmName}
           etaTemplate={etaTemplate}
           thanksTemplate={thanksTemplate}
+          driverNames={driverNames}
           onSave={handleSaveTemplates}
           onClose={() => setShowSettings(false)}
         />,
