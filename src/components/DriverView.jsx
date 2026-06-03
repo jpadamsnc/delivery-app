@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, CheckCircle, MessageSquare, Clock,
   ChevronDown, ChevronUp, Settings, RotateCcw, Loader,
@@ -59,7 +60,7 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose
   };
 
   return (
-    <div className="fixed inset-0 z-60 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} className="sm:items-center sm:p-4">
       <div className="bg-white w-full sm:rounded-2xl sm:max-w-lg max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
@@ -411,15 +412,16 @@ const DriverView = ({ route, driverColor, onClose }) => {
         <div className="h-4" />
       </div>
 
-      {/* Template editor */}
-      {showSettings && (
+      {/* Template editor — portalled to body so it renders above the Leaflet map */}
+      {showSettings && createPortal(
         <TemplateEditor
           farmName={farmName}
           etaTemplate={etaTemplate}
           thanksTemplate={thanksTemplate}
           onSave={handleSaveTemplates}
           onClose={() => setShowSettings(false)}
-        />
+        />,
+        document.body
       )}
     </div>
   );
