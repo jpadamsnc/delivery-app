@@ -54,6 +54,22 @@ export async function optimizeRoute(depot, orders, numVehicles) {
   return res.json();
 }
 
+export async function getDrivingTime(originLonLat, destLonLat) {
+  // Returns driving duration in seconds, or null on failure
+  try {
+    const res = await fetch(`${BASE}/v2/directions/driving-car/geojson`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: API_KEY },
+      body: JSON.stringify({ coordinates: [originLonLat, destLonLat] }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.features?.[0]?.properties?.summary?.duration ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getRoutePolyline(waypoints) {
   if (waypoints.length < 2) return [];
   const res = await fetch(`${BASE}/v2/directions/driving-car/geojson`, {

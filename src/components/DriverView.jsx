@@ -1,12 +1,32 @@
-import React, { useState } from 'react';
-import { X, CheckCircle, Circle, MessageSquare, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  X, CheckCircle, MessageSquare, Clock,
+  ChevronDown, ChevronUp, Settings, RotateCcw, Loader,
+} from 'lucide-react';
+import { getDrivingTime } from '../utils/routeService';
 
-// Change this to match your farm name as you want it to appear in texts
-const FARM_NAME = 'Fuster Cluck Farm';
+// ─── Default message templates ──────────────────────────────────────────────
+// Available placeholders:
+//   {firstName}   – customer's first name
+//   {farmName}    – your farm name
+//   {stopsAway}   – number of stops ahead of this one  (ETA only)
+//   {stopsWord}   – "stop" or "stops"                  (ETA only)
+//   {etaTime}     – clock time if GPS available, otherwise "~X minutes" / "shortly"
+// ─────────────────────────────────────────────────────────────────────────────
+const DEFAULT_ETA_TEMPLATE =
+  `Hi {firstName}! This is your {farmName} driver — we're {stopsAway} {stopsWord} away, estimated arrival at {etaTime}!`;
 
-function cleanPhone(phone) {
-  return (phone || '').replace(/\D/g, '');
-}
+const DEFAULT_THANKS_TEMPLATE =
+  `Hi {firstName}! Your {farmName} order has been delivered. Thank you so much for your support! 🐔`;
+
+const STORAGE_ETA    = 'deliveryEtaTemplate';
+const STORAGE_THANKS = 'deliveryThanksTemplate';
+const STORAGE_FARM   = 'deliveryFarmName';
+
+const DEFAULT_FARM = 'Fuster Cluck Farm';
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function cleanPhone(phone) { return (phone || '').replace(/\D/g, ''); }
 
 function smsLink(phone, body) {
   const number = cleanPhone(phone);
@@ -14,9 +34,132 @@ function smsLink(phone, body) {
   return `sms:${number}?body=${encodeURIComponent(body)}`;
 }
 
+function applyTemplate(template, vars) {
+  return template
+    .replace(/\{firstName\}/g,  vars.firstName  ?? '')
+    .replace(/\{farmName\}/g,   vars.farmName   ?? '')
+    .replace(/\{stopsAway\}/g,  vars.stopsAway  ?? '')
+    .replace(/\{stopsWord\}/g,  vars.stopsWord  ?? '')
+    .replace(/\{etaTime\}/g,    vars.etaTime    ?? '');
+}
+
+function formatArrivalTime(date) {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// ─── Template Editor Modal ────────────────────────────────────────────────────
+const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, onSave, onClose }) => {
+  const [farm,   setFarm]   = useState(farmName);
+  const [eta,    setEta]    = useState(etaTemplate);
+  const [thanks, setThanks] = useState(thanksTemplate);
+
+  const handleSave = () => {
+    onSave({ farmName: farm.trim() || DEFAULT_FARM, etaTemplate: eta, thanksTemplate: thanks });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-60 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white w-full sm:rounded-2xl sm:max-w-lg max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <h2 className="font-bold text-gray-900">Text Message Templates</h2>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-5 space-y-5">
+          {/* Farm name */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Farm Name</label>
+            <input
+              type="text"
+              value={farm}
+              onChange={e => setFarm(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+            />
+          </div>
+
+          {/* ETA template */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-semibold text-gray-700">ETA Message</label>
+              <button
+                onClick={() => setEta(DEFAULT_ETA_TEMPLATE)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+              >
+                <RotateCcw size={11} /> Reset
+              </button>
+            </div>
+            <textarea
+              value={eta}
+              onChange={e => setEta(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Placeholders: <code className="bg-gray-100 px-1 rounded">{'{firstName}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{farmName}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{stopsAway}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{stopsWord}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{etaTime}'}</code>
+            </p>
+          </div>
+
+          {/* Thank you template */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-semibold text-gray-700">Thank You Message</label>
+              <button
+                onClick={() => setThanks(DEFAULT_THANKS_TEMPLATE)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
+              >
+                <RotateCcw size={11} /> Reset
+              </button>
+            </div>
+            <textarea
+              value={thanks}
+              onChange={e => setThanks(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Placeholders: <code className="bg-gray-100 px-1 rounded">{'{firstName}'}</code>{' '}
+              <code className="bg-gray-100 px-1 rounded">{'{farmName}'}</code>
+            </p>
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-gray-200">
+          <button
+            onClick={handleSave}
+            className="w-full py-2.5 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition-colors"
+          >
+            Save Templates
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Main Driver View ─────────────────────────────────────────────────────────
 const DriverView = ({ route, driverColor, onClose }) => {
-  const [completedIds, setCompletedIds] = useState(new Set());
-  const [expandedId, setExpandedId]     = useState(null);
+  const [completedIds,  setCompletedIds]  = useState(new Set());
+  const [expandedId,    setExpandedId]    = useState(null);
+  const [etaLoadingId,  setEtaLoadingId]  = useState(null);
+  const [showSettings,  setShowSettings]  = useState(false);
+
+  const [farmName,      setFarmName]      = useState(() => localStorage.getItem(STORAGE_FARM)   || DEFAULT_FARM);
+  const [etaTemplate,   setEtaTemplate]   = useState(() => localStorage.getItem(STORAGE_ETA)    || DEFAULT_ETA_TEMPLATE);
+  const [thanksTemplate,setThanksTemplate]= useState(() => localStorage.getItem(STORAGE_THANKS) || DEFAULT_THANKS_TEMPLATE);
+
+  const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t }) => {
+    setFarmName(f);      localStorage.setItem(STORAGE_FARM,   f);
+    setEtaTemplate(e);   localStorage.setItem(STORAGE_ETA,    e);
+    setThanksTemplate(t);localStorage.setItem(STORAGE_THANKS, t);
+  };
 
   const toggleComplete = (orderId) => {
     setCompletedIds(prev => {
@@ -28,12 +171,62 @@ const DriverView = ({ route, driverColor, onClose }) => {
 
   const incompleteStops = route.stops.filter(s => !completedIds.has(s.order.orderId));
   const completedStops  = route.stops.filter(s =>  completedIds.has(s.order.orderId));
-  const allDone = completedStops.length === route.stops.length;
+  const allDone         = completedStops.length === route.stops.length;
 
-  // Average minutes per stop based on actual route duration
   const avgMin = route.summary?.duration
     ? Math.max(5, Math.round((route.summary.duration / 60) / route.stops.length))
     : 12;
+
+  // ── ETA handler: tries GPS → ORS, falls back to stops estimate ──────────────
+  const handleEta = async (order, stopsAway) => {
+    setEtaLoadingId(order.orderId);
+
+    let etaTime;
+    try {
+      const pos = await new Promise((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          timeout: 8000,
+          maximumAge: 30000,
+          enableHighAccuracy: false,
+        })
+      );
+
+      const { latitude: lat, longitude: lon } = pos.coords;
+      const seconds = await getDrivingTime(
+        [lon, lat],
+        [parseFloat(order.lon), parseFloat(order.lat)]
+      );
+
+      if (seconds != null) {
+        etaTime = formatArrivalTime(new Date(Date.now() + seconds * 1000));
+      } else {
+        throw new Error('no duration');
+      }
+    } catch {
+      // Fallback
+      etaTime = stopsAway === 0
+        ? 'shortly'
+        : `~${stopsAway * avgMin} minutes`;
+    }
+
+    setEtaLoadingId(null);
+
+    const firstName = (order.customerName || '').split(' ')[0];
+    const body = applyTemplate(etaTemplate, {
+      firstName,
+      farmName,
+      stopsAway,
+      stopsWord: stopsAway === 1 ? 'stop' : 'stops',
+      etaTime,
+    });
+    const href = smsLink(order.phone, body);
+    if (href) window.location.href = href;
+  };
+
+  const buildThanks = (order) => {
+    const firstName = (order.customerName || '').split(' ')[0];
+    return smsLink(order.phone, applyTemplate(thanksTemplate, { firstName, farmName }));
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col overflow-hidden">
@@ -44,10 +237,11 @@ const DriverView = ({ route, driverColor, onClose }) => {
           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: driverColor }} />
           <span className="font-bold text-gray-900">Driver {route.vehicleId} Route</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500">
-            {completedStops.length}/{route.stops.length} done
-          </span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">{completedStops.length}/{route.stops.length} done</span>
+          <button onClick={() => setShowSettings(true)} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500">
+            <Settings size={18} />
+          </button>
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-600">
             <X size={20} />
           </button>
@@ -65,10 +259,9 @@ const DriverView = ({ route, driverColor, onClose }) => {
         />
       </div>
 
-      {/* Scrollable stop list */}
+      {/* Scrollable list */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
 
-        {/* All done banner */}
         {allDone && (
           <div className="p-5 bg-green-50 border border-green-200 rounded-xl text-center text-green-800">
             <div className="text-3xl mb-1">🎉</div>
@@ -79,27 +272,17 @@ const DriverView = ({ route, driverColor, onClose }) => {
 
         {/* Incomplete stops */}
         {incompleteStops.map((stop, idx) => {
-          const { order } = stop;
-          const isExpanded = expandedId === order.orderId;
-          const stopsAway  = idx; // 0 = next stop
-
-          const etaBody = stopsAway === 0
-            ? `Hi ${order.customerName.split(' ')[0]}! This is your ${FARM_NAME} driver — we're on our way and should arrive shortly!`
-            : `Hi ${order.customerName.split(' ')[0]}! This is your ${FARM_NAME} driver — we're about ${stopsAway} stop${stopsAway !== 1 ? 's' : ''} away, estimated ~${stopsAway * avgMin} minutes!`;
-
-          const thankBody =
-            `Hi ${order.customerName.split(' ')[0]}! Your ${FARM_NAME} order has been delivered. Thank you so much for your support! 🐔`;
-
-          const etaHref     = smsLink(order.phone, etaBody);
-          const thankHref   = smsLink(order.phone, thankBody);
+          const { order }   = stop;
+          const isExpanded  = expandedId === order.orderId;
+          const isCalc      = etaLoadingId === order.orderId;
           const hasPhone    = !!cleanPhone(order.phone);
+          const thankHref   = buildThanks(order);
 
           return (
             <div key={order.orderId} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
 
               {/* Stop header */}
               <div className="flex items-start gap-3 p-4">
-                {/* Stop number badge */}
                 <span
                   className="flex-shrink-0 w-8 h-8 rounded-full text-white text-sm font-bold flex items-center justify-center mt-0.5"
                   style={{ background: driverColor }}
@@ -107,18 +290,13 @@ const DriverView = ({ route, driverColor, onClose }) => {
                   {idx + 1}
                 </span>
 
-                {/* Customer info */}
                 <div
                   className="flex-1 min-w-0 cursor-pointer"
                   onClick={() => setExpandedId(isExpanded ? null : order.orderId)}
                 >
-                  <div className="font-bold text-gray-900 text-base leading-tight">
-                    {order.customerName}
-                  </div>
+                  <div className="font-bold text-gray-900 text-base leading-tight">{order.customerName}</div>
                   <div className="text-sm text-gray-500 mt-0.5">{order.street}</div>
-                  <div className="text-sm text-gray-500">
-                    {order.city}, {order.state} {order.zip}
-                  </div>
+                  <div className="text-sm text-gray-500">{order.city}, {order.state} {order.zip}</div>
                   {order.phone && (
                     <div className="text-sm font-semibold text-gray-700 mt-0.5">{order.phone}</div>
                   )}
@@ -129,7 +307,6 @@ const DriverView = ({ route, driverColor, onClose }) => {
                   )}
                 </div>
 
-                {/* Expand toggle */}
                 <button
                   onClick={() => setExpandedId(isExpanded ? null : order.orderId)}
                   className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-600 mt-0.5"
@@ -138,7 +315,7 @@ const DriverView = ({ route, driverColor, onClose }) => {
                 </button>
               </div>
 
-              {/* Expanded items list */}
+              {/* Expanded items */}
               {isExpanded && (
                 <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
                   <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
@@ -159,43 +336,45 @@ const DriverView = ({ route, driverColor, onClose }) => {
 
               {/* Action buttons */}
               <div className="flex border-t border-gray-100 divide-x divide-gray-100">
+
+                {/* ETA */}
                 {hasPhone ? (
-                  <a
-                    href={etaHref}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium text-blue-600 hover:bg-blue-50 active:bg-blue-100"
+                  <button
+                    onClick={() => !isCalc && handleEta(order, idx)}
+                    disabled={isCalc}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium text-blue-600 hover:bg-blue-50 active:bg-blue-100 disabled:opacity-60"
                   >
-                    <Clock size={15} />
-                    ETA
-                  </a>
+                    {isCalc
+                      ? <><Loader size={15} className="animate-spin" /> Locating…</>
+                      : <><Clock size={15} /> ETA</>}
+                  </button>
                 ) : (
                   <span className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm text-gray-300">
-                    <Clock size={15} />
-                    ETA
+                    <Clock size={15} /> ETA
                   </span>
                 )}
 
+                {/* Thank You */}
                 {hasPhone ? (
                   <a
                     href={thankHref}
                     className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium text-emerald-600 hover:bg-emerald-50 active:bg-emerald-100"
                   >
-                    <MessageSquare size={15} />
-                    Thank You
+                    <MessageSquare size={15} /> Thank You
                   </a>
                 ) : (
                   <span className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm text-gray-300">
-                    <MessageSquare size={15} />
-                    Thank You
+                    <MessageSquare size={15} /> Thank You
                   </span>
                 )}
 
+                {/* Delivered */}
                 <button
                   onClick={() => toggleComplete(order.orderId)}
                   className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-bold text-white active:opacity-80"
                   style={{ background: driverColor }}
                 >
-                  <CheckCircle size={15} />
-                  Delivered
+                  <CheckCircle size={15} /> Delivered
                 </button>
               </div>
             </div>
@@ -209,21 +388,14 @@ const DriverView = ({ route, driverColor, onClose }) => {
               Completed ({completedStops.length})
             </div>
             {completedStops.map((stop) => (
-              <div
-                key={stop.order.orderId}
-                className="bg-white rounded-xl border border-gray-100 p-4 mb-3 opacity-50"
-              >
+              <div key={stop.order.orderId} className="bg-white rounded-xl border border-gray-100 p-4 mb-3 opacity-50">
                 <div className="flex items-center gap-3">
                   <button onClick={() => toggleComplete(stop.order.orderId)}>
                     <CheckCircle size={24} className="text-green-500" />
                   </button>
                   <div>
-                    <div className="font-medium text-gray-600 line-through">
-                      {stop.order.customerName}
-                    </div>
-                    <div className="text-xs text-gray-400">
-                      {stop.order.street}, {stop.order.city}
-                    </div>
+                    <div className="font-medium text-gray-600 line-through">{stop.order.customerName}</div>
+                    <div className="text-xs text-gray-400">{stop.order.street}, {stop.order.city}</div>
                   </div>
                 </div>
               </div>
@@ -231,9 +403,19 @@ const DriverView = ({ route, driverColor, onClose }) => {
           </div>
         )}
 
-        {/* Bottom padding so last card isn't flush against the edge */}
         <div className="h-4" />
       </div>
+
+      {/* Template editor */}
+      {showSettings && (
+        <TemplateEditor
+          farmName={farmName}
+          etaTemplate={etaTemplate}
+          thanksTemplate={thanksTemplate}
+          onSave={handleSaveTemplates}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 };
