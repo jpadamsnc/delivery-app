@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck } from 'lucide-react';
+import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck, Truck } from 'lucide-react';
 import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
 import RouteMap from './RouteMap';
+import DriverView from './DriverView';
 
 const DRIVER_COLORS = ['#2563EB', '#EA580C'];
 const DEPOT_STORAGE_KEY = 'deliveryDepotAddress';
@@ -21,7 +22,8 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   const [depotCoords, setDepotCoords] = useState(null);
   const [depotLabel, setDepotLabel] = useState('');
   const [numDrivers, setNumDrivers] = useState(1);
-  const [copiedDriverId, setCopiedDriverId] = useState(null);
+  const [copiedDriverId, setCopiedDriverId]       = useState(null);
+  const [activeDriverView, setActiveDriverView]   = useState(null); // vehicleId or null
   const [geocoding, setGeocoding] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState(null);
@@ -288,7 +290,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                       >
                         {copiedDriverId === route.vehicleId
                           ? <><ClipboardCheck size={12} /> Copied!</>
-                          : <><Copy size={12} /> Copy Route</>}
+                          : <><Copy size={12} /> Copy</>}
                       </button>
                       <button
                         onClick={() => handlePrintDriver(route)}
@@ -296,6 +298,14 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                       >
                         <Printer size={12} />
                         Labels
+                      </button>
+                      <button
+                        onClick={() => setActiveDriverView(route.vehicleId)}
+                        className="flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg text-white font-medium"
+                        style={{ background: color, borderColor: color }}
+                      >
+                        <Truck size={12} />
+                        Drive
                       </button>
                     </div>
                   </div>
@@ -332,6 +342,19 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       <div className="flex-1" style={{ minHeight: '500px' }}>
         <RouteMap depot={depotCoords} routes={routes} polylines={polylines} />
       </div>
+
+      {/* Driver view overlay */}
+      {activeDriverView && routes && (() => {
+        const route = routes.find(r => r.vehicleId === activeDriverView);
+        const color = DRIVER_COLORS[(activeDriverView - 1) % DRIVER_COLORS.length];
+        return route ? (
+          <DriverView
+            route={route}
+            driverColor={color}
+            onClose={() => setActiveDriverView(null)}
+          />
+        ) : null;
+      })()}
     </div>
   );
 };
