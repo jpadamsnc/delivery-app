@@ -10,13 +10,26 @@ function App() {
   const [error, setError] = useState(null);
 
   const handleFileUpload = async (file) => {
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.csv')) {
+      if (name.endsWith('.zip')) {
+        setError('That looks like a ZIP file. Open the Files app, tap the ZIP to unzip it, then upload the CSV file inside.');
+      } else {
+        setError(`Unexpected file type: "${file.name}". Please upload the CSV file from the Barn2Door packing list.`);
+      }
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const parsedData = await parseCSV(file);
+      if (!parsedData?.length) {
+        setError('The file appears to be empty or not a valid packing list CSV.');
+        return;
+      }
       setData(parsedData);
     } catch (err) {
-      setError("Failed to parse CSV file. Please check the format.");
+      setError('Failed to parse CSV file. Please check the format.');
       console.error(err);
     } finally {
       setLoading(false);
