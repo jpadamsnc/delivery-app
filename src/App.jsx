@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
+import DriverView from './components/DriverView';
 import { parseCSV, parseCsvText } from './utils/csvProcessor';
-import { Package, Download, Upload, Clock } from 'lucide-react';
+import { decodeDriverHash } from './utils/driverLink';
+import { Package, Download, Clock } from 'lucide-react';
 
 const STORAGE_CSV  = 'lastCsvText';
 const STORAGE_META = 'lastCsvMeta';
@@ -17,6 +19,11 @@ function formatDate(isoString) {
 }
 
 function App() {
+  // ── Driver link mode — opened via a shared #r=... URL ─────────────────────
+  const [driverRoute, setDriverRoute] = useState(() =>
+    decodeDriverHash(window.location.hash)
+  );
+
   const [data,      setData]      = useState(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState(null);
@@ -24,6 +31,23 @@ function App() {
     try { return JSON.parse(localStorage.getItem(STORAGE_META) || 'null'); }
     catch { return null; }
   });
+
+  // If the URL contains a driver route, render the Driver View immediately
+  if (driverRoute) {
+    const COLORS = ['#2563EB', '#EA580C'];
+    const color  = COLORS[(driverRoute.vehicleId - 1) % COLORS.length];
+    return (
+      <DriverView
+        route={driverRoute}
+        driverColor={color}
+        overrideFarmName={driverRoute.farmName}
+        onClose={() => {
+          window.location.hash = '';
+          setDriverRoute(null);
+        }}
+      />
+    );
+  }
 
   // ── Save CSV text + meta to localStorage ───────────────────────────────────
   const persistCsv = (text, name) => {

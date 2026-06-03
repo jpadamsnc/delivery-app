@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, CheckCircle, MessageSquare, Clock,
-  ChevronDown, ChevronUp, Settings, RotateCcw, Loader,
+  ChevronDown, ChevronUp, Settings, RotateCcw, Loader, Map,
 } from 'lucide-react';
 import { getDrivingTime } from '../utils/routeService';
 
@@ -182,18 +182,30 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, driverNames, on
 };
 
 // ─── Main Driver View ─────────────────────────────────────────────────────────
-const DriverView = ({ route, driverColor, onClose }) => {
+const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
   const [completedIds,  setCompletedIds]  = useState(new Set());
   const [expandedId,    setExpandedId]    = useState(null);
   const [etaLoadingId,  setEtaLoadingId]  = useState(null);
   const [showSettings,  setShowSettings]  = useState(false);
 
-  const [farmName,       setFarmName]       = useState(() => localStorage.getItem(STORAGE_FARM)   || DEFAULT_FARM);
+  const [farmName,       setFarmName]       = useState(() => overrideFarmName || localStorage.getItem(STORAGE_FARM) || DEFAULT_FARM);
   const [etaTemplate,    setEtaTemplate]    = useState(() => localStorage.getItem(STORAGE_ETA)    || DEFAULT_ETA_TEMPLATE);
   const [thanksTemplate, setThanksTemplate] = useState(() => localStorage.getItem(STORAGE_THANKS) || DEFAULT_THANKS_TEMPLATE);
   const [driverNames,    setDriverNames]    = useState(() => { try { return JSON.parse(localStorage.getItem(STORAGE_DRIVERS) || '[]'); } catch { return []; } });
 
-  const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+  const driverName = route.driverName || driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+
+  // Google Maps link for the full route (all incomplete stops in order)
+  const mapsUrl = (() => {
+    const stops = route.stops.filter(s => s.order?.lat && s.order?.lon);
+    if (!stops.length) return null;
+    const waypoints = stops.slice(0, 8).map(s => `${s.order.lat},${s.order.lon}`).join('|');
+    const dest = stops[stops.length - 1];
+    return `https://www.google.com/maps/dir/?api=1` +
+      `&destination=${dest.order.lat},${dest.order.lon}` +
+      (stops.length > 1 ? `&waypoints=${stops.slice(0, -1).map(s => `${s.order.lat},${s.order.lon}`).join('|')}` : '') +
+      `&travelmode=driving`;
+  })();
 
   const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t, driverNames: d }) => {
     setFarmName(f);        localStorage.setItem(STORAGE_FARM,    f);
@@ -281,6 +293,18 @@ const DriverView = ({ route, driverColor, onClose }) => {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">{completedStops.length}/{route.stops.length} done</span>
+          {mapsUrl && (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg text-white"
+              style={{ background: driverColor }}
+              title="Open full route in Google Maps"
+            >
+              <Map size={13} /> Navigate
+            </a>
+          )}
           <button onClick={() => setShowSettings(true)} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-500">
             <Settings size={18} />
           </button>

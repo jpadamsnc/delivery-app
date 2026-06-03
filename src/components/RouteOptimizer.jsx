@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck, Truck } from 'lucide-react';
+import { MapPin, Navigation, Printer, AlertCircle, CheckCircle, Loader, Copy, ClipboardCheck, Truck, Share2 } from 'lucide-react';
 import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
+import { encodeDriverLink } from '../utils/driverLink';
 import RouteMap from './RouteMap';
 import DriverView, { getDriverName } from './DriverView';
 
@@ -23,6 +24,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   const [depotLabel, setDepotLabel] = useState('');
   const [numDrivers, setNumDrivers] = useState(1);
   const [copiedDriverId,   setCopiedDriverId]   = useState(null);
+  const [sharedDriverId,   setSharedDriverId]   = useState(null);
   const [activeDriverView, setActiveDriverView] = useState(null);
   const [driverNames,      setDriverNames]      = useState(() => {
     try { return JSON.parse(localStorage.getItem('deliveryDriverNames') || '[]'); }
@@ -141,6 +143,16 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     navigator.clipboard.writeText(message).then(() => {
       setCopiedDriverId(route.vehicleId);
       setTimeout(() => setCopiedDriverId(null), 2500);
+    });
+  };
+
+  const handleShareDriver = (route) => {
+    const name = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+    const farmName = localStorage.getItem('deliveryFarmName') || 'Fuster Cluck Farm';
+    const url = encodeDriverLink(route, name, farmName);
+    navigator.clipboard.writeText(url).then(() => {
+      setSharedDriverId(route.vehicleId);
+      setTimeout(() => setSharedDriverId(null), 2500);
     });
   };
 
@@ -297,7 +309,20 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                         {formatDuration(route.summary.duration)}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      <button
+                        onClick={() => handleShareDriver(route)}
+                        className={`flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg transition-all font-medium ${
+                          sharedDriverId === route.vehicleId
+                            ? 'border-green-400 bg-green-50 text-green-700'
+                            : 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
+                        }`}
+                        title="Copy a link to send to the driver — opens their route directly on their phone"
+                      >
+                        {sharedDriverId === route.vehicleId
+                          ? <><ClipboardCheck size={12} /> Copied!</>
+                          : <><Share2 size={12} /> Driver Link</>}
+                      </button>
                       <button
                         onClick={() => handleCopyRoute(route)}
                         className={`flex items-center gap-1 text-xs px-2.5 py-1.5 border rounded-lg transition-all ${
@@ -305,10 +330,11 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                             ? 'border-green-400 bg-green-50 text-green-700'
                             : 'border-gray-200 hover:bg-gray-50 text-gray-600'
                         }`}
+                        title="Copy a text message with Google Maps link"
                       >
                         {copiedDriverId === route.vehicleId
                           ? <><ClipboardCheck size={12} /> Copied!</>
-                          : <><Copy size={12} /> Copy</>}
+                          : <><Copy size={12} /> Copy Route</>}
                       </button>
                       <button
                         onClick={() => handlePrintDriver(route)}
