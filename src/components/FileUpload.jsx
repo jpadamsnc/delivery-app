@@ -33,8 +33,8 @@ const FileUpload = ({ onFileUpload }) => {
                 className="hidden"
             />
             <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            <p className="text-lg font-medium text-gray-700">Drop your CSV file here</p>
-            <p className="text-sm text-gray-500 mt-2">or click to browse</p>
+            <p className="text-lg font-medium text-gray-700">Drop your packing list here</p>
+            <p className="text-sm text-gray-500 mt-2">CSV or ZIP file · click to browse</p>
         </div>
     );
 };

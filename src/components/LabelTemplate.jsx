@@ -1,5 +1,8 @@
 import React, { useMemo } from 'react';
 import _ from 'lodash';
+import farmLogo from '../assets/Fuster-Cluck-Logo-Black.png';
+
+const FARM_LOGO = farmLogo;
 
 const ITEMS_PER_PAGE = 12;
 
@@ -30,7 +33,7 @@ const LabelTemplate = ({ data }) => {
             width: '4in',
             height: '3in',
             paddingTop: '0.12in',
-            paddingLeft: '0.22in',
+            paddingLeft: '0.13in',
             paddingRight: '0.15in',
             paddingBottom: '0.12in',
             boxSizing: 'border-box',
@@ -42,7 +45,7 @@ const LabelTemplate = ({ data }) => {
             <div
               style={{
                 position: 'absolute',
-                top: '0.1in',
+                top: '0.08in',
                 right: '0.1in',
                 backgroundColor: driverColor,
                 color: 'white',
@@ -57,13 +60,29 @@ const LabelTemplate = ({ data }) => {
             </div>
           )}
 
+          {/* Farm logo — top-right, first page only; below driver badge when present */}
+          {FARM_LOGO && pageIndex === 0 && (
+            <img
+              src={FARM_LOGO}
+              alt="Farm logo"
+              style={{
+                position: 'absolute',
+                top: driverInfo ? '0.28in' : '0.06in',
+                right: '0.1in',
+                maxHeight: '0.38in',
+                maxWidth: '0.7in',
+                objectFit: 'contain',
+              }}
+            />
+          )}
+
           {/* Header row */}
           <div
             className="flex justify-between items-baseline font-sans"
             style={{ fontSize: '10px', marginBottom: '2px', lineHeight: '1.2' }}
           >
             <span className="font-medium">{deliveryDate}</span>
-            <span className="font-medium" style={{ marginRight: driverInfo ? '1.1in' : '0' }}>
+            <span className="font-medium" style={{ marginRight: FARM_LOGO || driverInfo ? '0.8in' : '0' }}>
               Ord: {data.orderId}
             </span>
           </div>

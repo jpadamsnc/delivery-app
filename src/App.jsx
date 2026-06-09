@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import JSZip from 'jszip';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
 import DriverView from './components/DriverView';
@@ -57,33 +58,54 @@ function App() {
     setSavedMeta(meta);
   };
 
-  // ── Upload a new CSV file ──────────────────────────────────────────────────
-  const handleFileUpload = async (file) => {
+  // ── Extract CSV text from a file (handles .csv and .zip) ─────────────────
+  const extractCsvText = async (file) => {
     const name = file.name.toLowerCase();
-    if (!name.endsWith('.csv')) {
-      setError(name.endsWith('.zip')
-        ? 'That looks like a ZIP file. Open the Files app, tap the ZIP to unzip it, then upload the CSV file inside.'
-        : `Unexpected file type: "${file.name}". Please upload the CSV packing list.`);
-      return;
+
+    if (name.endsWith('.zip')) {
+      const zip = await JSZip.loadAsync(file);
+      const csvFiles = Object.values(zip.files).filter(
+        f => !f.dir && f.name.toLowerCase().endsWith('.csv')
+      );
+      if (csvFiles.length === 0) throw new Error('No CSV file found inside the ZIP.');
+      // Use the first CSV found
+      const text = await csvFiles[0].async('text');
+      return { text, filename: csvFiles[0].name.split('/').pop() };
     }
-    setLoading(true);
-    setError(null);
-    try {
+
+    if (name.endsWith('.csv')) {
       const text = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload  = (e) => resolve(e.target.result);
         reader.onerror = reject;
         reader.readAsText(file);
       });
+      return { text, filename: file.name };
+    }
+
+    throw new Error(`Unexpected file type: "${file.name}". Please upload a CSV or ZIP file.`);
+  };
+
+  // ── Upload a new CSV or ZIP file ───────────────────────────────────────────
+  const handleFileUpload = async (file) => {
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.csv') && !name.endsWith('.zip')) {
+      setError(`Unexpected file type: "${file.name}". Please upload the CSV packing list or its ZIP archive.`);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { text, filename } = await extractCsvText(file);
       const parsedData = await parseCsvText(text);
       if (!parsedData?.length) {
         setError('The file appears to be empty or not a valid packing list CSV.');
         return;
       }
-      persistCsv(text, file.name);
+      persistCsv(text, filename);
       setData(parsedData);
     } catch (err) {
-      setError('Failed to parse CSV file. Please check the format.');
+      setError(err.message || 'Failed to parse file. Please check the format.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -219,7 +241,7 @@ function App() {
 
             {/* Cross-device hint */}
             <p className="text-center text-xs text-gray-400">
-              On another device? Use <strong>Save Session</strong> (navbar) on this device to download a file,
+              Accepts CSV or ZIP files. On another device? Use <strong>Save Session</strong> (navbar) on this device to download a file,
               then upload it here.
             </p>
           </div>
