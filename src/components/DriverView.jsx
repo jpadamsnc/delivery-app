@@ -24,6 +24,7 @@ const STORAGE_ETA     = 'deliveryEtaTemplate';
 const STORAGE_THANKS  = 'deliveryThanksTemplate';
 const STORAGE_FARM    = 'deliveryFarmName';
 const STORAGE_DRIVERS = 'deliveryDriverNames'; // JSON array ["Jim","Carol"]
+const STORAGE_COMPLETED_PREFIX = 'deliveryCompleted_'; // + route key
 
 export function getDriverName(vehicleId) {
   try {
@@ -183,7 +184,16 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, driverNames, on
 
 // ─── Main Driver View ─────────────────────────────────────────────────────────
 const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
-  const [completedIds,  setCompletedIds]  = useState(new Set());
+  // Stable key for this specific route so completed-stop state survives a page reload
+  // (iOS Safari frequently reloads the tab after the driver leaves to send an SMS or open Maps).
+  const routeKey = `${STORAGE_COMPLETED_PREFIX}${route.vehicleId}_${route.stops.map(s => s.order.orderId).join(',')}`;
+
+  const [completedIds,  setCompletedIds]  = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(routeKey) || '[]');
+      return new Set(saved);
+    } catch { return new Set(); }
+  });
   const [expandedId,    setExpandedId]    = useState(null);
   const [etaLoadingId,  setEtaLoadingId]  = useState(null);
   const [showSettings,  setShowSettings]  = useState(false);
@@ -218,6 +228,7 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
     setCompletedIds(prev => {
       const next = new Set(prev);
       next.has(orderId) ? next.delete(orderId) : next.add(orderId);
+      localStorage.setItem(routeKey, JSON.stringify([...next]));
       return next;
     });
   };

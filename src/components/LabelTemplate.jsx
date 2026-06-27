@@ -46,7 +46,7 @@ const LabelTemplate = ({ data }) => {
               style={{
                 position: 'absolute',
                 top: '0.08in',
-                right: '0.1in',
+                right: '0.22in',
                 backgroundColor: driverColor,
                 color: 'white',
                 fontSize: '8px',
@@ -68,9 +68,9 @@ const LabelTemplate = ({ data }) => {
               style={{
                 position: 'absolute',
                 top: driverInfo ? '0.28in' : '0.06in',
-                right: '0.1in',
+                right: '0.22in',
                 maxHeight: '0.38in',
-                maxWidth: '0.7in',
+                maxWidth: '0.6in',
                 objectFit: 'contain',
               }}
             />
@@ -82,7 +82,7 @@ const LabelTemplate = ({ data }) => {
             style={{ fontSize: '10px', marginBottom: '2px', lineHeight: '1.2' }}
           >
             <span className="font-medium">{deliveryDate}</span>
-            <span className="font-medium" style={{ marginRight: FARM_LOGO || driverInfo ? '0.8in' : '0' }}>
+            <span className="font-medium" style={{ marginRight: FARM_LOGO || driverInfo ? '0.9in' : '0' }}>
               Ord: {data.orderId}
             </span>
           </div>
