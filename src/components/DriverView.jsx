@@ -205,15 +205,16 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
 
   const driverName = route.driverName || driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
 
-  // Google Maps link for the full route (all incomplete stops in order)
+  // Google Maps link for the full route — use street addresses so Google's own
+  // geocoder resolves them accurately (Barn2Door lat/lon can be off by a house or two).
   const mapsUrl = (() => {
-    const stops = route.stops.filter(s => s.order?.lat && s.order?.lon);
+    const stops = route.stops.filter(s => s.order?.street);
     if (!stops.length) return null;
-    const waypoints = stops.slice(0, 8).map(s => `${s.order.lat},${s.order.lon}`).join('|');
+    const addr = s => encodeURIComponent(`${s.order.street}, ${s.order.city}, ${s.order.state} ${s.order.zip}`);
     const dest = stops[stops.length - 1];
     return `https://www.google.com/maps/dir/?api=1` +
-      `&destination=${dest.order.lat},${dest.order.lon}` +
-      (stops.length > 1 ? `&waypoints=${stops.slice(0, -1).map(s => `${s.order.lat},${s.order.lon}`).join('|')}` : '') +
+      `&destination=${addr(dest)}` +
+      (stops.length > 1 ? `&waypoints=${stops.slice(0, -1).map(addr).join('|')}` : '') +
       `&travelmode=driving`;
   })();
 
