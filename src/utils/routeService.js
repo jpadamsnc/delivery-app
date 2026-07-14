@@ -24,6 +24,60 @@ export async function geocodeAddress(address) {
   };
 }
 
+// Live address suggestions as the user types (ORS/Pelias autocomplete)
+export async function autocompleteAddress(text) {
+  if (!text || text.trim().length < 4) return [];
+  try {
+    const res = await fetch(
+      `${BASE}/geocode/autocomplete?api_key=${API_KEY}&text=${encodeURIComponent(text)}&boundary.country=US&size=5&layers=address`
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.features || []).map(f => {
+      const p = f.properties;
+      const [lon, lat] = f.geometry.coordinates;
+      return {
+        lat, lon,
+        label:  p.label,
+        layer:  p.layer || '',
+        street: [p.housenumber, p.street].filter(Boolean).join(' '),
+        city:   p.locality || p.county || '',
+        state:  p.region_a || '',
+        zip:    p.postalcode || '',
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// Fallback geocoder: US Census Bureau — official government address database.
+// Catches newer subdivisions that OpenStreetMap-based data hasn't picked up yet.
+export async function geocodeCensus(address) {
+  try {
+    const res = await fetch(
+      `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=json`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const match = data?.result?.addressMatches?.[0];
+    if (!match) return null;
+    const comp = match.addressComponents || {};
+    return {
+      lat:    match.coordinates.y,
+      lon:    match.coordinates.x,
+      label:  match.matchedAddress,
+      layer:  'address',
+      street: match.matchedAddress.split(',')[0],
+      city:   comp.city  || '',
+      state:  comp.state || '',
+      zip:    comp.zip   || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function optimizeRoute(depot, orders, numVehicles) {
   // max_tasks caps stops per vehicle so VROOM must distribute them,
   // while still being free to minimise total drive duration across both routes.

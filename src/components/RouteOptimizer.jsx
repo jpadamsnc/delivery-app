@@ -4,7 +4,7 @@ import {
   Loader, Copy, ClipboardCheck, Truck, Share2, ArrowRight, RefreshCw,
   PlusCircle, Trash2,
 } from 'lucide-react';
-import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
+import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRoutePolyline } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
 import RouteMap from './RouteMap';
 import DriverView, { getDriverName } from './DriverView';
@@ -59,6 +59,9 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   const [newStopPhone,   setNewStopPhone]   = useState('');
   const [newStopNote,    setNewStopNote]    = useState('');
   const [addingStop,     setAddingStop]     = useState(false);
+  const [suggestions,    setSuggestions]    = useState([]);
+  const [pickedGeo,      setPickedGeo]      = useState(null); // verified suggestion the user clicked
+  const suggestTimer = React.useRef(null);
 
   // All orders that feed optimization: CSV orders + manually added stops
   const allOrders = [...(labelData || []), ...extraStops];
@@ -104,16 +107,42 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   // ── Add a manual stop ─────────────────────────────────────────────────────
+  const handleStopAddressChange = (value) => {
+    setNewStopAddress(value);
+    setPickedGeo(null); // typing invalidates a previously picked suggestion
+    clearTimeout(suggestTimer.current);
+    if (value.trim().length < 4) { setSuggestions([]); return; }
+    suggestTimer.current = setTimeout(async () => {
+      setSuggestions(await autocompleteAddress(value));
+    }, 300);
+  };
+
+  const pickSuggestion = (s) => {
+    setPickedGeo(s);
+    setNewStopAddress(s.label);
+    setSuggestions([]);
+  };
+
   const handleAddStop = async () => {
     if (!newStopName.trim() || !newStopAddress.trim()) return;
     setAddingStop(true);
     setError(null);
+    setSuggestions([]);
     try {
-      const geo = await geocodeAddress(newStopAddress);
-      if (geo.layer !== 'address') {
+      // Priority: 1) suggestion the user picked, 2) ORS exact match,
+      // 3) US Census geocoder (official address database — catches new subdivisions)
+      let geo = pickedGeo;
+      if (!geo) {
+        try {
+          const ors = await geocodeAddress(newStopAddress);
+          if (ors.layer === 'address') geo = ors;
+        } catch { /* fall through to Census */ }
+      }
+      if (!geo) geo = await geocodeCensus(newStopAddress);
+      if (!geo) {
         throw new Error(
-          `Couldn't find that exact address — closest match was "${geo.label}". ` +
-          `Check the spelling, or try adding the ZIP code (e.g. "42 Yellow Daisy Pl, Clayton, NC 27520").`
+          `Couldn't verify that address in either the map database or the US Census address database. ` +
+          `Double-check spelling and ZIP, or pick one of the suggestions that appear while typing.`
         );
       }
       const stop = {
@@ -133,6 +162,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       };
       setExtraStops(prev => persistExtraStops([...prev, stop]));
       setNewStopName(''); setNewStopAddress(''); setNewStopPhone(''); setNewStopNote('');
+      setPickedGeo(null);
       setShowAddStop(false);
       // Existing results are stale once a stop is added
       setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
@@ -401,13 +431,36 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                 placeholder="Name (e.g. Feed Store pickup)"
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
               />
-              <input
-                type="text"
-                value={newStopAddress}
-                onChange={e => setNewStopAddress(e.target.value)}
-                placeholder="Address (e.g. 123 Main St, Kenly, NC)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={newStopAddress}
+                  onChange={e => handleStopAddressChange(e.target.value)}
+                  placeholder="Address (e.g. 123 Main St, Kenly, NC)"
+                  className={`w-full px-3 py-2 text-sm border rounded-lg focus:ring-1 outline-none ${
+                    pickedGeo
+                      ? 'border-green-400 focus:border-green-500 focus:ring-green-500'
+                      : 'border-gray-300 focus:border-blue-500 focus:ring-blue-500'
+                  }`}
+                />
+                {pickedGeo && (
+                  <CheckCircle size={15} className="absolute right-3 top-2.5 text-green-500" />
+                )}
+                {suggestions.length > 0 && (
+                  <ul className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                    {suggestions.map((s, i) => (
+                      <li key={i}>
+                        <button
+                          onClick={() => pickSuggestion(s)}
+                          className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 border-b border-gray-50 last:border-0"
+                        >
+                          {s.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <div className="flex gap-2">
                 <input
                   type="text"
