@@ -26,7 +26,7 @@ export const parseCSV = (file) => {
 
 export const generateVamoData = (sourceData) => {
   const grouped = _.groupBy(sourceData, 'Order #');
-  return Object.keys(grouped).map((orderNum) => {
+  const rows = Object.keys(grouped).map((orderNum) => {
     const first = grouped[orderNum][0];
     return {
       Customer: first['Customer'] || '',
@@ -38,6 +38,23 @@ export const generateVamoData = (sourceData) => {
       City: first['City'] || '',
       State: first['State'] || '',
       Zip: first['Zip'] || '',
+    };
+  });
+
+  // Combine rows with the same customer name AND street address into one row
+  const byCustomerAddress = _.groupBy(rows, (r) =>
+    `${(r.Customer || '').trim().toLowerCase()}|${(r.Street || '').trim().toLowerCase()}`
+  );
+
+  return Object.values(byCustomerAddress).map((group) => {
+    if (group.length === 1) return group[0];
+    const first = group[0];
+    return {
+      ...first,
+      'Order #': group.map(r => r['Order #']).join(' + '),
+      'Phone Number':  group.map(r => r['Phone Number']).find(Boolean)  || '',
+      Email:           group.map(r => r.Email).find(Boolean)            || '',
+      'Delivery Note': group.map(r => r['Delivery Note']).find(Boolean) || '',
     };
   });
 };
