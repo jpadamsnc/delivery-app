@@ -14,7 +14,10 @@ export async function geocodeAddress(address) {
   return {
     lat, lon,
     label:  p.label,
-    street: [p.housenumber, p.street].filter(Boolean).join(' ') || p.name || '',
+    // layer tells how precise the match is: 'address' = exact house,
+    // 'street' = street only, 'locality' = town center, etc.
+    layer:  p.layer || '',
+    street: [p.housenumber, p.street].filter(Boolean).join(' '),
     city:   p.locality || p.county || '',
     state:  p.region_a || '',
     zip:    p.postalcode || '',

@@ -110,6 +110,12 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     setError(null);
     try {
       const geo = await geocodeAddress(newStopAddress);
+      if (geo.layer !== 'address') {
+        throw new Error(
+          `Couldn't find that exact address — closest match was "${geo.label}". ` +
+          `Check the spelling, or try adding the ZIP code (e.g. "42 Yellow Daisy Pl, Clayton, NC 27520").`
+        );
+      }
       const stop = {
         orderId:      `custom-${Date.now()}`,
         isCustom:     true,
