@@ -113,7 +113,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     clearTimeout(suggestTimer.current);
     if (value.trim().length < 4) { setSuggestions([]); return; }
     suggestTimer.current = setTimeout(async () => {
-      setSuggestions(await autocompleteAddress(value));
+      setSuggestions(await autocompleteAddress(value, depotCoords));
     }, 300);
   };
 

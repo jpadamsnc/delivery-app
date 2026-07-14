@@ -25,11 +25,13 @@ export async function geocodeAddress(address) {
 }
 
 // Live address suggestions as the user types (ORS/Pelias autocomplete)
-export async function autocompleteAddress(text) {
+export async function autocompleteAddress(text, focus) {
   if (!text || text.trim().length < 4) return [];
   try {
+    // Bias results toward the depot location so nearby matches rank first
+    const focusParam = focus ? `&focus.point.lat=${focus.lat}&focus.point.lon=${focus.lon}` : '';
     const res = await fetch(
-      `${BASE}/geocode/autocomplete?api_key=${API_KEY}&text=${encodeURIComponent(text)}&boundary.country=US&size=5&layers=address`
+      `${BASE}/geocode/autocomplete?api_key=${API_KEY}&text=${encodeURIComponent(text)}&boundary.country=US&size=5&layers=address${focusParam}`
     );
     if (!res.ok) return [];
     const data = await res.json();
@@ -53,13 +55,25 @@ export async function autocompleteAddress(text) {
 
 // Fallback geocoder: US Census Bureau — official government address database.
 // Catches newer subdivisions that OpenStreetMap-based data hasn't picked up yet.
+// The Census API doesn't send CORS headers, so we use JSONP instead of fetch.
+function censusJsonp(address) {
+  return new Promise((resolve) => {
+    const cb = `censusCb_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const script = document.createElement('script');
+    const cleanup = () => { delete window[cb]; script.remove(); };
+    const timer = setTimeout(() => { cleanup(); resolve(null); }, 10000);
+    window[cb] = (data) => { clearTimeout(timer); cleanup(); resolve(data); };
+    script.src =
+      `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress` +
+      `?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=jsonp&callback=${cb}`;
+    script.onerror = () => { clearTimeout(timer); cleanup(); resolve(null); };
+    document.body.appendChild(script);
+  });
+}
+
 export async function geocodeCensus(address) {
   try {
-    const res = await fetch(
-      `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=json`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await censusJsonp(address);
     const match = data?.result?.addressMatches?.[0];
     if (!match) return null;
     const comp = match.addressComponents || {};
