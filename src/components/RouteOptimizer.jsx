@@ -43,8 +43,16 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     catch { return []; }
   });
 
-  // ── Extra (manually added) stops ─────────────────────────────────────────
-  const [extraStops,     setExtraStops]     = useState([]);
+  // ── Extra (manually added) stops — persisted so they survive Resume ──────
+  const EXTRA_STOPS_KEY = 'deliveryExtraStops';
+  const [extraStops,     setExtraStops]     = useState(() => {
+    try { return JSON.parse(localStorage.getItem(EXTRA_STOPS_KEY) || '[]'); }
+    catch { return []; }
+  });
+  const persistExtraStops = (stops) => {
+    localStorage.setItem(EXTRA_STOPS_KEY, JSON.stringify(stops));
+    return stops;
+  };
   const [showAddStop,    setShowAddStop]    = useState(false);
   const [newStopName,    setNewStopName]    = useState('');
   const [newStopAddress, setNewStopAddress] = useState('');
@@ -117,7 +125,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         lon:    geo.lon,
         items:  [],
       };
-      setExtraStops(prev => [...prev, stop]);
+      setExtraStops(prev => persistExtraStops([...prev, stop]));
       setNewStopName(''); setNewStopAddress(''); setNewStopPhone(''); setNewStopNote('');
       setShowAddStop(false);
       // Existing results are stale once a stop is added
@@ -130,7 +138,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   const removeExtraStop = (orderId) => {
-    setExtraStops(prev => prev.filter(s => s.orderId !== orderId));
+    setExtraStops(prev => persistExtraStops(prev.filter(s => s.orderId !== orderId)));
     setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
   };
 
