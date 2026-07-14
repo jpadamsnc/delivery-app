@@ -202,7 +202,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     try {
       const newRoutes = await Promise.all(
         editedRoutes.map(async route => {
-          if (route.stops.length <= 1) {
+          if (route.stops.length === 0) {
             return { ...route, summary: { distance: 0, duration: 0 } };
           }
           const orders = route.stops.map(s => s.order);
@@ -505,7 +505,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                         style={{ color, borderColor: color }}
                       />
                       <span className="text-gray-500 text-xs">
-                        {route.stops.length} stops
+                        {route.stops.length} stop{route.stops.length !== 1 ? 's' : ''}
                         {route.summary.distance > 0 && ` · ${formatDistance(route.summary.distance)}`}
                         {route.summary.duration > 0 && ` · ${formatDuration(route.summary.duration)}`}
                         {isManuallyEdited && <span className="text-amber-500"> *</span>}
