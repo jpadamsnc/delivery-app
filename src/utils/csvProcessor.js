@@ -58,7 +58,7 @@ export const exportToCSV = (data, filename) => {
 export const prepareLabelData = (sourceData) => {
   const grouped = _.groupBy(sourceData, 'Order #');
 
-  return Object.keys(grouped).map((orderId) => {
+  const orders = Object.keys(grouped).map((orderId) => {
     const items = grouped[orderId];
     const info = items[0];
 
@@ -81,6 +81,25 @@ export const prepareLabelData = (sourceData) => {
         unit: item['Size'],
         weight: item['Final Weight'] || '',
       })),
+    };
+  });
+
+  // Combine orders with the exact same customer name AND street address
+  // into a single stop (items merged, order IDs joined with " + ").
+  const byCustomerAddress = _.groupBy(orders, (o) =>
+    `${(o.customerName || '').trim().toLowerCase()}|${(o.street || '').trim().toLowerCase()}`
+  );
+
+  return Object.values(byCustomerAddress).map((group) => {
+    if (group.length === 1) return group[0];
+    const first = group[0];
+    return {
+      ...first,
+      orderId: group.map((o) => o.orderId).join(' + '),
+      // Keep the first non-empty note/phone across the merged orders
+      phone:        group.map(o => o.phone).find(Boolean)        || '',
+      deliveryNote: group.map(o => o.deliveryNote).find(Boolean) || '',
+      items: group.flatMap((o) => o.items),
     };
   });
 };

@@ -8,8 +8,17 @@ export async function geocodeAddress(address) {
   if (!res.ok) throw new Error(`Geocoding error: ${res.status}`);
   const data = await res.json();
   if (!data.features?.length) throw new Error('Address not found. Try a more specific address.');
-  const [lon, lat] = data.features[0].geometry.coordinates;
-  return { lat, lon, label: data.features[0].properties.label };
+  const feature = data.features[0];
+  const [lon, lat] = feature.geometry.coordinates;
+  const p = feature.properties;
+  return {
+    lat, lon,
+    label:  p.label,
+    street: [p.housenumber, p.street].filter(Boolean).join(' ') || p.name || '',
+    city:   p.locality || p.county || '',
+    state:  p.region_a || '',
+    zip:    p.postalcode || '',
+  };
 }
 
 export async function optimizeRoute(depot, orders, numVehicles) {

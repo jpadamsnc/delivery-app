@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   MapPin, Navigation, Printer, AlertCircle, CheckCircle,
   Loader, Copy, ClipboardCheck, Truck, Share2, ArrowRight, RefreshCw,
+  PlusCircle, Trash2,
 } from 'lucide-react';
 import { geocodeAddress, optimizeRoute, getRoutePolyline } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
@@ -41,6 +42,18 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     try { return JSON.parse(localStorage.getItem('deliveryDriverNames') || '[]'); }
     catch { return []; }
   });
+
+  // ── Extra (manually added) stops ─────────────────────────────────────────
+  const [extraStops,     setExtraStops]     = useState([]);
+  const [showAddStop,    setShowAddStop]    = useState(false);
+  const [newStopName,    setNewStopName]    = useState('');
+  const [newStopAddress, setNewStopAddress] = useState('');
+  const [newStopPhone,   setNewStopPhone]   = useState('');
+  const [newStopNote,    setNewStopNote]    = useState('');
+  const [addingStop,     setAddingStop]     = useState(false);
+
+  // All orders that feed optimization: CSV orders + manually added stops
+  const allOrders = [...(labelData || []), ...extraStops];
 
   const updateDriverName = (vehicleId, name) => {
     setDriverNames(prev => {
@@ -82,8 +95,47 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     }
   };
 
+  // ── Add a manual stop ─────────────────────────────────────────────────────
+  const handleAddStop = async () => {
+    if (!newStopName.trim() || !newStopAddress.trim()) return;
+    setAddingStop(true);
+    setError(null);
+    try {
+      const geo = await geocodeAddress(newStopAddress);
+      const stop = {
+        orderId:      `custom-${Date.now()}`,
+        isCustom:     true,
+        deliveryDate: '',
+        customerName: newStopName.trim(),
+        phone:        newStopPhone.trim(),
+        deliveryNote: newStopNote.trim(),
+        street: geo.street || newStopAddress.trim(),
+        city:   geo.city,
+        state:  geo.state,
+        zip:    geo.zip,
+        lat:    geo.lat,
+        lon:    geo.lon,
+        items:  [],
+      };
+      setExtraStops(prev => [...prev, stop]);
+      setNewStopName(''); setNewStopAddress(''); setNewStopPhone(''); setNewStopNote('');
+      setShowAddStop(false);
+      // Existing results are stale once a stop is added
+      setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAddingStop(false);
+    }
+  };
+
+  const removeExtraStop = (orderId) => {
+    setExtraStops(prev => prev.filter(s => s.orderId !== orderId));
+    setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
+  };
+
   const handleOptimize = async () => {
-    if (!depotCoords || !labelData?.length) return;
+    if (!depotCoords || !allOrders.length) return;
     setOptimizing(true);
     setError(null);
     setRoutes(null);
@@ -92,11 +144,11 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     setIsManuallyEdited(false);
 
     try {
-      const result = await optimizeRoute(depotCoords, labelData, numDrivers);
+      const result = await optimizeRoute(depotCoords, allOrders, numDrivers);
       const processed = result.routes.map(r => {
         const jobSteps = r.steps.filter(s => s.type === 'job');
         const stops = jobSteps
-          .map(step => ({ order: labelData[step.id - 1], stopNum: step.arrival }))
+          .map(step => ({ order: allOrders[step.id - 1], stopNum: step.arrival }))
           .filter(s => s.order != null);
         const summary = r.summary ?? { duration: r.duration ?? 0, distance: r.distance ?? 0 };
         return { vehicleId: r.vehicle, stops, summary };
@@ -285,10 +337,104 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
           </div>
         </div>
 
+        {/* Add a stop */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+              <PlusCircle size={16} className="text-gray-500" /> Additional Stops
+              {extraStops.length > 0 && (
+                <span className="text-xs font-normal text-gray-400">({extraStops.length})</span>
+              )}
+            </h3>
+            {!showAddStop && (
+              <button
+                onClick={() => setShowAddStop(true)}
+                className="text-xs font-medium text-blue-600 hover:text-blue-700"
+              >
+                + Add Stop
+              </button>
+            )}
+          </div>
+
+          {/* Existing extra stops */}
+          {extraStops.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {extraStops.map(s => (
+                <li key={s.orderId} className="flex items-center gap-2 text-xs bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-gray-800 truncate">{s.customerName}</div>
+                    <div className="text-[10px] text-gray-500 truncate">{s.street}, {s.city}</div>
+                  </div>
+                  <button
+                    onClick={() => removeExtraStop(s.orderId)}
+                    className="flex-shrink-0 p-1 text-gray-400 hover:text-red-500"
+                    title="Remove stop"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Add-stop form */}
+          {showAddStop && (
+            <div className="mt-3 space-y-2">
+              <input
+                type="text"
+                value={newStopName}
+                onChange={e => setNewStopName(e.target.value)}
+                placeholder="Name (e.g. Feed Store pickup)"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+              />
+              <input
+                type="text"
+                value={newStopAddress}
+                onChange={e => setNewStopAddress(e.target.value)}
+                placeholder="Address (e.g. 123 Main St, Kenly, NC)"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+              />
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newStopPhone}
+                  onChange={e => setNewStopPhone(e.target.value)}
+                  placeholder="Phone (optional)"
+                  className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+                <input
+                  type="text"
+                  value={newStopNote}
+                  onChange={e => setNewStopNote(e.target.value)}
+                  placeholder="Note (optional)"
+                  className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleAddStop}
+                  disabled={!newStopName.trim() || !newStopAddress.trim() || addingStop}
+                  className="flex-1 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-black disabled:opacity-40 flex items-center justify-center gap-1.5"
+                >
+                  {addingStop
+                    ? <><Loader size={14} className="animate-spin" /> Finding address…</>
+                    : 'Add Stop'}
+                </button>
+                <button
+                  onClick={() => setShowAddStop(false)}
+                  className="px-3 py-2 text-sm text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Optimize button */}
         <button
           onClick={handleOptimize}
-          disabled={!depotCoords || !labelData?.length || optimizing}
+          disabled={!depotCoords || !allOrders.length || optimizing}
           className="w-full py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-40 flex items-center justify-center gap-2 shadow-sm transition-all"
         >
           {optimizing
