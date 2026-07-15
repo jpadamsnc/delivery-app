@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import {
   MapPin, Navigation, Printer, AlertCircle, CheckCircle,
   Loader, Copy, ClipboardCheck, Truck, Share2, ArrowRight, RefreshCw,
-  PlusCircle, Trash2,
+  PlusCircle, Trash2, ChevronUp, ChevronDown, Check,
 } from 'lucide-react';
-import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRoutePolyline } from '../utils/routeService';
+import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRoutePolyline, getRouteDetails } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
 import RouteMap from './RouteMap';
 import DriverView, { getDriverName } from './DriverView';
@@ -236,6 +236,56 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     });
     setPolylines(null); // polylines are stale until re-optimized
     setIsManuallyEdited(true);
+  };
+
+  // ── Reorder a stop within its driver's route ─────────────────────────────
+  const reorderStop = (vehicleId, orderId, direction) => {
+    const shift = (routeList) => {
+      const next = routeList.map(r => ({ ...r, stops: [...r.stops] }));
+      const route = next.find(r => r.vehicleId === vehicleId);
+      if (!route) return routeList;
+      const idx = route.stops.findIndex(s => s.order.orderId === orderId);
+      const to  = idx + direction;
+      if (idx === -1 || to < 0 || to >= route.stops.length) return routeList;
+      [route.stops[idx], route.stops[to]] = [route.stops[to], route.stops[idx]];
+      return next;
+    };
+    setEditedRoutes(prev => shift(prev));
+    setRoutes(prev => (prev ? shift(prev) : prev));
+    setPolylines(null);
+    setIsManuallyEdited(true);
+  };
+
+  // ── Keep the user's manual order: recalc times + map without re-optimizing ─
+  const handleKeepOrder = async () => {
+    if (!depotCoords || !editedRoutes) return;
+    setReoptimizing(true);
+    setError(null);
+    try {
+      const details = await Promise.all(editedRoutes.map(route => {
+        if (!route.stops.length) return Promise.resolve({ coords: [], distance: 0, duration: 0 });
+        const waypoints = [
+          [depotCoords.lon, depotCoords.lat],
+          ...route.stops.map(s => [parseFloat(s.order.lon), parseFloat(s.order.lat)]),
+          [depotCoords.lon, depotCoords.lat],
+        ];
+        return getRouteDetails(waypoints);
+      }));
+
+      const newRoutes = editedRoutes.map((route, i) => ({
+        ...route,
+        summary: { distance: details[i].distance, duration: details[i].duration },
+      }));
+
+      setEditedRoutes(newRoutes);
+      setRoutes(newRoutes);
+      setPolylines(details.map(d => d.coords));
+      setIsManuallyEdited(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setReoptimizing(false);
+    }
   };
 
   // ── Re-optimize each driver's current stops independently ─────────────────
@@ -523,18 +573,28 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
             <div className="flex justify-between items-center">
               <span className="text-sm font-semibold text-gray-700">Optimized Routes</span>
               <div className="flex gap-1.5">
-                {/* Re-optimize after manual edits */}
+                {/* After manual edits: keep the user's order, or re-optimize */}
                 {isManuallyEdited && (
-                  <button
-                    onClick={handleReoptimize}
-                    disabled={reoptimizing}
-                    className="flex items-center gap-1 text-xs px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
-                    title="Re-optimize stop order for each driver based on their current assignment"
-                  >
-                    {reoptimizing
-                      ? <><Loader size={12} className="animate-spin" /> Optimizing…</>
-                      : <><RefreshCw size={12} /> Re-optimize Order</>}
-                  </button>
+                  <>
+                    <button
+                      onClick={handleKeepOrder}
+                      disabled={reoptimizing}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
+                      title="Keep the current stop order and update times and the map"
+                    >
+                      {reoptimizing
+                        ? <><Loader size={12} className="animate-spin" /> Updating…</>
+                        : <><Check size={12} /> Keep My Order</>}
+                    </button>
+                    <button
+                      onClick={handleReoptimize}
+                      disabled={reoptimizing}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium disabled:opacity-50"
+                      title="Let the optimizer pick the best stop order for each driver"
+                    >
+                      <RefreshCw size={12} /> Re-optimize
+                    </button>
+                  </>
                 )}
                 {displayRoutes.length > 1 && (
                   <button onClick={handlePrintAll}
@@ -548,7 +608,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
             {isManuallyEdited && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                Stops have been manually reassigned. Click <strong>Re-optimize Order</strong> to find the best sequence for each driver.
+                Stops have been manually changed. Click <strong>Keep My Order</strong> to update times and the map with your arrangement, or <strong>Re-optimize</strong> to let the optimizer pick the best sequence.
               </p>
             )}
 
@@ -631,6 +691,25 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                           <div className="text-[10px] text-gray-500 truncate">
                             {stop.order.street}, {stop.order.city}
                           </div>
+                        </div>
+                        {/* Reorder within this driver's route */}
+                        <div className="flex-shrink-0 flex flex-col">
+                          <button
+                            onClick={() => reorderStop(route.vehicleId, stop.order.orderId, -1)}
+                            disabled={idx === 0}
+                            className="p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-20"
+                            title="Move up"
+                          >
+                            <ChevronUp size={13} />
+                          </button>
+                          <button
+                            onClick={() => reorderStop(route.vehicleId, stop.order.orderId, 1)}
+                            disabled={idx === route.stops.length - 1}
+                            className="p-0.5 text-gray-400 hover:text-gray-700 disabled:opacity-20"
+                            title="Move down"
+                          >
+                            <ChevronDown size={13} />
+                          </button>
                         </div>
                         {/* Move to other driver button — only shown with 2 drivers */}
                         {otherRoute && (

@@ -147,7 +147,14 @@ export async function getDrivingTime(originLonLat, destLonLat) {
 }
 
 export async function getRoutePolyline(waypoints) {
-  if (waypoints.length < 2) return [];
+  const details = await getRouteDetails(waypoints);
+  return details.coords;
+}
+
+// Route a fixed sequence of waypoints; returns path + total distance/duration
+export async function getRouteDetails(waypoints) {
+  const empty = { coords: [], distance: 0, duration: 0 };
+  if (waypoints.length < 2) return empty;
   const res = await fetch(`${BASE}/v2/directions/driving-car/geojson`, {
     method: 'POST',
     headers: {
@@ -156,7 +163,13 @@ export async function getRoutePolyline(waypoints) {
     },
     body: JSON.stringify({ coordinates: waypoints }),
   });
-  if (!res.ok) return [];
+  if (!res.ok) return empty;
   const data = await res.json();
-  return data.features[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+  const feature = data.features?.[0];
+  if (!feature) return empty;
+  return {
+    coords:   feature.geometry.coordinates.map(([lon, lat]) => [lat, lon]),
+    distance: feature.properties?.summary?.distance ?? 0,
+    duration: feature.properties?.summary?.duration ?? 0,
+  };
 }
