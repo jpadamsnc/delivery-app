@@ -92,12 +92,19 @@ export async function geocodeCensus(address) {
   }
 }
 
-export async function optimizeRoute(depot, orders, numVehicles) {
+export async function optimizeRoute(depots, orders, numVehicles) {
+  // `depots` is either a single {lat, lon} shared by every vehicle, or an array
+  // with one depot per vehicle. Vehicles past the end of the array fall back to
+  // the first depot, so a partially-filled list still routes.
+  const depotList = Array.isArray(depots) ? depots : [depots];
+  const depotAt = (i) => depotList[i] || depotList[0];
+
   // max_tasks caps stops per vehicle so VROOM must distribute them,
   // while still being free to minimise total drive duration across both routes.
   const maxTasks = numVehicles > 1 ? Math.ceil(orders.length / numVehicles) : undefined;
 
   const vehicles = Array.from({ length: numVehicles }, (_, i) => {
+    const depot = depotAt(i);
     const v = {
       id: i + 1,
       profile: 'driving-car',

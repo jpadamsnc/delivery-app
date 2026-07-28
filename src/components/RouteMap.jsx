@@ -14,9 +14,9 @@ function makeCircleIcon(color, label) {
   });
 }
 
-function makeDepotIcon() {
+function makeDepotIcon(color = DEPOT_COLOR) {
   return L.divIcon({
-    html: `<div style="width:26px;height:26px;border-radius:4px;background:${DEPOT_COLOR};border:2px solid white;display:flex;align-items:center;justify-content:center;color:white;font-size:9px;font-weight:bold;box-shadow:0 2px 4px rgba(0,0,0,0.4)">⌂</div>`,
+    html: `<div style="width:26px;height:26px;border-radius:4px;background:${color};border:2px solid white;display:flex;align-items:center;justify-content:center;color:white;font-size:9px;font-weight:bold;box-shadow:0 2px 4px rgba(0,0,0,0.4)">⌂</div>`,
     className: '',
     iconSize: [26, 26],
     iconAnchor: [13, 13],
@@ -24,7 +24,7 @@ function makeDepotIcon() {
   });
 }
 
-const RouteMap = ({ depot, routes, polylines }) => {
+const RouteMap = ({ depots, routes, polylines }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const layersRef = useRef([]);
@@ -60,16 +60,33 @@ const RouteMap = ({ depot, routes, polylines }) => {
     layersRef.current.forEach((l) => map.removeLayer(l));
     layersRef.current = [];
 
-    if (!depot || !routes?.length) return;
+    const depotList = (depots || []).filter(Boolean);
+    if (!depotList.length || !routes?.length) return;
 
     const bounds = [];
 
-    // Depot marker
-    const depotMarker = L.marker([depot.lat, depot.lon], { icon: makeDepotIcon() })
-      .bindPopup('<b>Depot / Start & End</b>')
-      .addTo(map);
-    layersRef.current.push(depotMarker);
-    bounds.push([depot.lat, depot.lon]);
+    // Depot markers — one per driver. Drivers sharing a depot collapse onto a
+    // single neutral-coloured marker; unique depots take the driver's colour.
+    const seen = new Map(); // "lat,lon" -> [driver numbers]
+    depotList.forEach((d, i) => {
+      const key = `${d.lat},${d.lon}`;
+      if (seen.has(key)) { seen.get(key).push(i + 1); return; }
+      seen.set(key, [i + 1]);
+    });
+
+    seen.forEach((driverNums, key) => {
+      const [lat, lon] = key.split(',').map(Number);
+      const shared = driverNums.length > 1;
+      const color = shared ? DEPOT_COLOR : DRIVER_COLORS[(driverNums[0] - 1) % DRIVER_COLORS.length];
+      const title = shared || depotList.length === 1
+        ? 'Depot / Start & End'
+        : `Driver ${driverNums[0]} — Start & End`;
+      const marker = L.marker([lat, lon], { icon: makeDepotIcon(color) })
+        .bindPopup(`<b>${title}</b>`)
+        .addTo(map);
+      layersRef.current.push(marker);
+      bounds.push([lat, lon]);
+    });
 
     routes.forEach((route, rIdx) => {
       const color = DRIVER_COLORS[rIdx % DRIVER_COLORS.length];
@@ -103,7 +120,7 @@ const RouteMap = ({ depot, routes, polylines }) => {
     } else if (bounds.length === 1) {
       map.setView(bounds[0], 11);
     }
-  }, [depot, routes, polylines]);
+  }, [depots, routes, polylines]);
 
   return (
     <div

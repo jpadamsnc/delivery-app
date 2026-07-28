@@ -4,13 +4,15 @@ import {
   Loader, Copy, ClipboardCheck, Truck, Share2, ArrowRight, RefreshCw,
   PlusCircle, Trash2, ChevronUp, ChevronDown, Check,
 } from 'lucide-react';
-import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRoutePolyline, getRouteDetails } from '../utils/routeService';
+import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRouteDetails } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
 import RouteMap from './RouteMap';
 import DriverView, { getDriverName } from './DriverView';
 
 const DRIVER_COLORS = ['#2563EB', '#EA580C'];
-const DEPOT_STORAGE_KEY = 'deliveryDepotAddress';
+// Driver 1's depot keeps the original key so existing saved addresses still load.
+const DEPOT_STORAGE_KEYS = ['deliveryDepotAddress', 'deliveryDepotAddress2'];
+const SHARED_DEPOT_KEY   = 'deliveryDepotShared';
 
 function formatDuration(seconds) {
   const h = Math.floor(seconds / 3600);
@@ -22,12 +24,50 @@ function formatDistance(meters) {
   return (meters / 1609.34).toFixed(1) + ' mi';
 }
 
+// One depot address input + Set button. Declared at module level so React keeps
+// the input mounted across re-renders (otherwise it loses focus on every keystroke).
+const DepotField = ({ color, name, value, onChange, onSet, busy, verifiedLabel }) => (
+  <div>
+    {name && (
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+        <span className="text-xs font-medium text-gray-600">{name}</span>
+      </div>
+    )}
+    <div className="flex gap-2">
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && onSet()}
+        placeholder="123 Farm Rd, City, NC 27000"
+        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+      />
+      <button
+        onClick={onSet}
+        disabled={!value.trim() || busy}
+        className="px-3 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-black disabled:opacity-40 flex items-center gap-1"
+      >
+        {busy ? <Loader size={14} className="animate-spin" /> : 'Set'}
+      </button>
+    </div>
+    {verifiedLabel && (
+      <div className="mt-2 flex items-start gap-1.5 text-xs text-green-700">
+        <CheckCircle size={13} className="mt-0.5 flex-shrink-0" />
+        <span className="truncate">{verifiedLabel}</span>
+      </div>
+    )}
+  </div>
+);
+
 const RouteOptimizer = ({ labelData, onPrintLabels }) => {
-  const [depotAddress,     setDepotAddress]     = useState(() => localStorage.getItem(DEPOT_STORAGE_KEY) || '');
-  const [depotCoords,      setDepotCoords]      = useState(null);
-  const [depotLabel,       setDepotLabel]       = useState('');
+  // Depots are per-driver: index 0 = Driver 1, index 1 = Driver 2.
+  const [depotAddresses,   setDepotAddresses]   = useState(() => DEPOT_STORAGE_KEYS.map(k => localStorage.getItem(k) || ''));
+  const [depotCoordsList,  setDepotCoordsList]  = useState([null, null]);
+  const [depotLabels,      setDepotLabels]      = useState(['', '']);
+  const [sharedDepot,      setSharedDepot]      = useState(() => localStorage.getItem(SHARED_DEPOT_KEY) !== 'false');
   const [numDrivers,       setNumDrivers]       = useState(1);
-  const [geocoding,        setGeocoding]        = useState(false);
+  const [geocodingIdx,     setGeocodingIdx]     = useState(null);
   const [optimizing,       setOptimizing]       = useState(false);
   const [reoptimizing,     setReoptimizing]     = useState(false);
   const [error,            setError]            = useState(null);
@@ -66,6 +106,17 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   // All orders that feed optimization: CSV orders + manually added stops
   const allOrders = [...(labelData || []), ...extraStops];
 
+  // ── Depot resolution ──────────────────────────────────────────────────────
+  // With one driver — or when Driver 2 shares Driver 1's depot — every vehicle
+  // starts and ends at depot 0. Otherwise each driver uses their own.
+  const useSharedDepot = numDrivers === 1 || sharedDepot;
+  const effectiveDepots = useSharedDepot
+    ? [depotCoordsList[0], depotCoordsList[0]]
+    : depotCoordsList;
+  const activeDepots = effectiveDepots.slice(0, numDrivers);
+  const depotsReady  = activeDepots.length > 0 && activeDepots.every(Boolean);
+  const depotFor     = (vehicleId) => effectiveDepots[vehicleId - 1] || effectiveDepots[0];
+
   const updateDriverName = (vehicleId, name) => {
     setDriverNames(prev => {
       const next = [...prev];
@@ -76,34 +127,60 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
-  const buildPolylines = async (routeList) => {
-    return Promise.all(routeList.map(route => {
-      if (!route.stops.length) return Promise.resolve([]);
+  const clearResults = () => {
+    setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
+  };
+
+  // Route each driver through their own depot → stops → back to their own depot.
+  // Returns both the refreshed summaries and the map polylines in one pass.
+  const recalcRoutes = async (routeList) => {
+    const details = await Promise.all(routeList.map(route => {
+      const depot = depotFor(route.vehicleId);
+      if (!route.stops.length || !depot) return Promise.resolve({ coords: [], distance: 0, duration: 0 });
       const waypoints = [
-        [depotCoords.lon, depotCoords.lat],
+        [depot.lon, depot.lat],
         ...route.stops.map(s => [parseFloat(s.order.lon), parseFloat(s.order.lat)]),
-        [depotCoords.lon, depotCoords.lat],
+        [depot.lon, depot.lat],
       ];
-      return getRoutePolyline(waypoints);
+      return getRouteDetails(waypoints);
     }));
+    return {
+      routes: routeList.map((route, i) => ({
+        ...route,
+        summary: { distance: details[i].distance, duration: details[i].duration },
+      })),
+      polylines: details.map(d => d.coords),
+    };
   };
 
   // ── Initial optimization ──────────────────────────────────────────────────
-  const handleSetDepot = async () => {
-    if (!depotAddress.trim()) return;
-    setGeocoding(true);
+  const setDepotAddressAt = (idx, value) => {
+    setDepotAddresses(prev => { const next = [...prev]; next[idx] = value; return next; });
+  };
+
+  const handleSetDepot = async (idx) => {
+    const address = depotAddresses[idx];
+    if (!address.trim()) return;
+    setGeocodingIdx(idx);
     setError(null);
-    setDepotCoords(null);
+    setDepotCoordsList(prev => { const next = [...prev]; next[idx] = null; return next; });
     try {
-      const coords = await geocodeAddress(depotAddress);
-      setDepotCoords(coords);
-      setDepotLabel(coords.label);
-      localStorage.setItem(DEPOT_STORAGE_KEY, depotAddress);
+      const coords = await geocodeAddress(address);
+      setDepotCoordsList(prev => { const next = [...prev]; next[idx] = coords;       return next; });
+      setDepotLabels(prev    => { const next = [...prev]; next[idx] = coords.label; return next; });
+      localStorage.setItem(DEPOT_STORAGE_KEYS[idx], address);
+      clearResults(); // existing routes were built around the old depot
     } catch (e) {
       setError(e.message);
     } finally {
-      setGeocoding(false);
+      setGeocodingIdx(null);
     }
+  };
+
+  const toggleSharedDepot = (shared) => {
+    setSharedDepot(shared);
+    localStorage.setItem(SHARED_DEPOT_KEY, String(shared));
+    clearResults();
   };
 
   // ── Add a manual stop ─────────────────────────────────────────────────────
@@ -113,7 +190,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     clearTimeout(suggestTimer.current);
     if (value.trim().length < 4) { setSuggestions([]); return; }
     suggestTimer.current = setTimeout(async () => {
-      setSuggestions(await autocompleteAddress(value, depotCoords));
+      setSuggestions(await autocompleteAddress(value, effectiveDepots[0]));
     }, 300);
   };
 
@@ -164,8 +241,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       setNewStopName(''); setNewStopAddress(''); setNewStopPhone(''); setNewStopNote('');
       setPickedGeo(null);
       setShowAddStop(false);
-      // Existing results are stale once a stop is added
-      setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
+      clearResults(); // existing results are stale once a stop is added
     } catch (e) {
       setError(e.message);
     } finally {
@@ -175,32 +251,79 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   const removeExtraStop = (orderId) => {
     setExtraStops(prev => persistExtraStops(prev.filter(s => s.orderId !== orderId)));
-    setRoutes(null); setEditedRoutes(null); setPolylines(null); setIsManuallyEdited(false);
+    clearResults();
+  };
+
+  // ── Hand-off stop ─────────────────────────────────────────────────────────
+  // Driver 1 carries Driver 2's orders and drops them at Driver 2's depot. This
+  // adds that meeting point as a stop pinned to the front of Driver 1's route,
+  // so the optimizer can't hand it to Driver 2 (who is already standing there).
+  const handoffStop = extraStops.find(s => s.pinVehicle);
+  // Only meaningful with two drivers on separate depots. Otherwise the stop
+  // stays in the list as an ordinary one the optimizer is free to assign.
+  const handoffActive = numDrivers > 1 && !sharedDepot && !!handoffStop;
+  const manualStops   = extraStops.filter(s => !(handoffActive && s.pinVehicle));
+
+  const addHandoffStop = () => {
+    const depot = depotCoordsList[1];
+    if (!depot) return;
+    const name = driverNames[1] || 'Driver 2';
+    const stop = {
+      orderId:      `handoff-${Date.now()}`,
+      isCustom:     true,
+      isHandoff:    true,
+      pinVehicle:   1,           // always rides at the front of Driver 1's route
+      deliveryDate: '',
+      customerName: `Hand-off to ${name}`,
+      phone:        '',
+      deliveryNote: `Transfer ${name}'s orders here`,
+      street: depot.street || depotAddresses[1],
+      city:   depot.city,
+      state:  depot.state,
+      zip:    depot.zip,
+      lat:    depot.lat,
+      lon:    depot.lon,
+      items:  [],
+    };
+    setExtraStops(prev => persistExtraStops([...prev.filter(s => !s.pinVehicle), stop]));
+    clearResults();
   };
 
   const handleOptimize = async () => {
-    if (!depotCoords || !allOrders.length) return;
+    if (!depotsReady || !allOrders.length) return;
     setOptimizing(true);
     setError(null);
-    setRoutes(null);
-    setEditedRoutes(null);
-    setPolylines(null);
-    setIsManuallyEdited(false);
+    clearResults();
 
     try {
-      const result = await optimizeRoute(depotCoords, allOrders, numDrivers);
-      const processed = result.routes.map(r => {
-        const jobSteps = r.steps.filter(s => s.type === 'job');
-        const stops = jobSteps
-          .map(step => ({ order: allOrders[step.id - 1], stopNum: step.arrival }))
-          .filter(s => s.order != null);
-        const summary = r.summary ?? { duration: r.duration ?? 0, distance: r.distance ?? 0 };
-        return { vehicleId: r.vehicle, stops, summary };
+      // Pinned stops (the hand-off) are placed by hand, not by the optimizer.
+      const pinned    = handoffActive ? allOrders.filter(o => o.pinVehicle) : [];
+      const jobOrders = allOrders.filter(o => !pinned.includes(o));
+
+      const result = await optimizeRoute(activeDepots, jobOrders, numDrivers);
+      const byVehicle = new Map(result.routes.map(r => [r.vehicle, r]));
+
+      // Build one route per driver — VROOM omits vehicles it gave no jobs to,
+      // and an empty driver still needs a card and a depot of their own.
+      const processed = Array.from({ length: numDrivers }, (_, i) => {
+        const vehicleId = i + 1;
+        const r = byVehicle.get(vehicleId);
+        const stops = r
+          ? r.steps.filter(s => s.type === 'job')
+              .map(step => ({ order: jobOrders[step.id - 1], stopNum: step.arrival }))
+              .filter(s => s.order != null)
+          : [];
+        const pinnedHere = pinned
+          .filter(o => o.pinVehicle === vehicleId)
+          .map(o => ({ order: o, stopNum: null }));
+        return { vehicleId, stops: [...pinnedHere, ...stops], summary: { distance: 0, duration: 0 } };
       });
 
-      setRoutes(processed);
-      setEditedRoutes(processed);
-      setPolylines(await buildPolylines(processed));
+      // Recalculate against each driver's own depot (and any pinned stops).
+      const { routes: finalRoutes, polylines: lines } = await recalcRoutes(processed);
+      setRoutes(finalRoutes);
+      setEditedRoutes(finalRoutes);
+      setPolylines(lines);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -210,6 +333,8 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   // ── Manual stop reassignment ──────────────────────────────────────────────
   const moveStop = (fromVehicleId, orderId) => {
+    // A pinned hand-off belongs to one driver by definition — never reassign it.
+    if (handoffActive && handoffStop?.orderId === orderId) return;
     setEditedRoutes(prev => {
       const next = prev.map(r => ({ ...r, stops: [...r.stops] }));
       const from = next.find(r => r.vehicleId === fromVehicleId);
@@ -258,28 +383,14 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   // ── Keep the user's manual order: recalc times + map without re-optimizing ─
   const handleKeepOrder = async () => {
-    if (!depotCoords || !editedRoutes) return;
+    if (!depotsReady || !editedRoutes) return;
     setReoptimizing(true);
     setError(null);
     try {
-      const details = await Promise.all(editedRoutes.map(route => {
-        if (!route.stops.length) return Promise.resolve({ coords: [], distance: 0, duration: 0 });
-        const waypoints = [
-          [depotCoords.lon, depotCoords.lat],
-          ...route.stops.map(s => [parseFloat(s.order.lon), parseFloat(s.order.lat)]),
-          [depotCoords.lon, depotCoords.lat],
-        ];
-        return getRouteDetails(waypoints);
-      }));
-
-      const newRoutes = editedRoutes.map((route, i) => ({
-        ...route,
-        summary: { distance: details[i].distance, duration: details[i].duration },
-      }));
-
+      const { routes: newRoutes, polylines: lines } = await recalcRoutes(editedRoutes);
       setEditedRoutes(newRoutes);
       setRoutes(newRoutes);
-      setPolylines(details.map(d => d.coords));
+      setPolylines(lines);
       setIsManuallyEdited(false);
     } catch (e) {
       setError(e.message);
@@ -290,32 +401,31 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   // ── Re-optimize each driver's current stops independently ─────────────────
   const handleReoptimize = async () => {
-    if (!depotCoords || !editedRoutes) return;
+    if (!depotsReady || !editedRoutes) return;
     setReoptimizing(true);
     setError(null);
     try {
-      const newRoutes = await Promise.all(
+      const resequenced = await Promise.all(
         editedRoutes.map(async route => {
-          if (route.stops.length === 0) {
-            return { ...route, summary: { distance: 0, duration: 0 } };
-          }
-          const orders = route.stops.map(s => s.order);
-          const result = await optimizeRoute(depotCoords, orders, 1);
+          // The hand-off stays first — only the remaining stops get resequenced.
+          const pinnedHere = handoffActive ? route.stops.filter(s => s.order.pinVehicle) : [];
+          const free       = route.stops.filter(s => !pinnedHere.includes(s));
+          if (free.length === 0) return route;
+
+          const orders = free.map(s => s.order);
+          const result = await optimizeRoute(depotFor(route.vehicleId), orders, 1);
           const jobSteps = result.routes[0].steps.filter(s => s.type === 'job');
           const reordered = jobSteps
             .map(step => ({ order: orders[step.id - 1] }))
             .filter(s => s.order != null);
-          const summary = result.routes[0].summary ?? {
-            duration: result.routes[0].duration ?? 0,
-            distance: result.routes[0].distance ?? 0,
-          };
-          return { ...route, stops: reordered, summary };
+          return { ...route, stops: [...pinnedHere, ...reordered] };
         })
       );
 
+      const { routes: newRoutes, polylines: lines } = await recalcRoutes(resequenced);
       setEditedRoutes(newRoutes);
       setRoutes(newRoutes);
-      setPolylines(await buildPolylines(newRoutes));
+      setPolylines(lines);
       setIsManuallyEdited(false);
     } catch (e) {
       setError(e.message);
@@ -326,11 +436,12 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   // ── Action buttons ────────────────────────────────────────────────────────
   const handleCopyRoute = (route) => {
+    const depot = depotFor(route.vehicleId);
     const waypoints = route.stops.slice(0, 8).map(s => `${s.order.lat},${s.order.lon}`).join('|');
     const mapsUrl =
       `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${depotCoords.lat},${depotCoords.lon}` +
-      `&destination=${depotCoords.lat},${depotCoords.lon}` +
+      `&origin=${depot.lat},${depot.lon}` +
+      `&destination=${depot.lat},${depot.lon}` +
       `&waypoints=${waypoints}&travelmode=driving`;
     const stopLines = route.stops
       .map((s, i) => `${i + 1}. ${s.order.customerName} — ${s.order.street}, ${s.order.city}`)
@@ -356,21 +467,20 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     });
   };
 
-  const handlePrintDriver = (route) => {
-    onPrintLabels(route.stops.map((stop, idx) => ({
+  // Stop numbers stay aligned with the on-screen list, but the hand-off point
+  // has no order to pack, so it never gets a label.
+  const labelsForRoute = (route) => route.stops
+    .map((stop, idx) => ({
       ...stop.order,
       driverInfo: { driverNum: route.vehicleId, stopNum: idx + 1, totalStops: route.stops.length },
-    })));
-  };
+    }))
+    .filter(label => !label.isHandoff);
+
+  const handlePrintDriver = (route) => onPrintLabels(labelsForRoute(route));
 
   const handlePrintAll = () => {
     if (!editedRoutes) return;
-    onPrintLabels(editedRoutes.flatMap(route =>
-      route.stops.map((stop, idx) => ({
-        ...stop.order,
-        driverInfo: { driverNum: route.vehicleId, stopNum: idx + 1, totalStops: route.stops.length },
-      }))
-    ));
+    onPrintLabels(editedRoutes.flatMap(labelsForRoute));
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -381,32 +491,77 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       {/* Left panel */}
       <div className="w-full lg:w-96 flex-shrink-0 space-y-4 overflow-y-auto">
 
-        {/* Depot */}
+        {/* Depot(s) */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-            <MapPin size={16} className="text-gray-500" /> Start / End Depot
+            <MapPin size={16} className="text-gray-500" />
+            Start / End Depot{numDrivers > 1 && !sharedDepot ? 's' : ''}
           </h3>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={depotAddress}
-              onChange={e => setDepotAddress(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSetDepot()}
-              placeholder="123 Farm Rd, City, NC 27000"
-              className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
-            />
-            <button
-              onClick={handleSetDepot}
-              disabled={!depotAddress.trim() || geocoding}
-              className="px-3 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-black disabled:opacity-40 flex items-center gap-1"
-            >
-              {geocoding ? <Loader size={14} className="animate-spin" /> : 'Set'}
-            </button>
-          </div>
-          {depotCoords && (
-            <div className="mt-2 flex items-start gap-1.5 text-xs text-green-700">
-              <CheckCircle size={13} className="mt-0.5 flex-shrink-0" />
-              <span className="truncate">{depotLabel}</span>
+
+          <DepotField
+            color={DRIVER_COLORS[0]}
+            name={numDrivers > 1 && !sharedDepot
+              ? (driverNames[0] || 'Driver 1')
+              : null}
+            value={depotAddresses[0]}
+            onChange={v => setDepotAddressAt(0, v)}
+            onSet={() => handleSetDepot(0)}
+            busy={geocodingIdx === 0}
+            verifiedLabel={depotCoordsList[0] ? depotLabels[0] : ''}
+          />
+
+          {numDrivers > 1 && (
+            <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
+              <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={sharedDepot}
+                  onChange={e => toggleSharedDepot(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                {driverNames[1] || 'Driver 2'} starts and ends at the same depot
+              </label>
+
+              {!sharedDepot && (
+                <>
+                  <DepotField
+                    color={DRIVER_COLORS[1]}
+                    name={driverNames[1] || 'Driver 2'}
+                    value={depotAddresses[1]}
+                    onChange={v => setDepotAddressAt(1, v)}
+                    onSet={() => handleSetDepot(1)}
+                    busy={geocodingIdx === 1}
+                    verifiedLabel={depotCoordsList[1] ? depotLabels[1] : ''}
+                  />
+
+                  {/* Hand-off: Driver 1 carries Driver 2's orders to this depot */}
+                  {depotCoordsList[1] && !handoffStop && (
+                    <button
+                      onClick={addHandoffStop}
+                      className="w-full flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700"
+                      title={`Adds this address as the first stop on ${driverNames[0] || 'Driver 1'}'s route`}
+                    >
+                      <PlusCircle size={13} />
+                      Make this {driverNames[0] || 'Driver 1'}'s first stop (hand-off)
+                    </button>
+                  )}
+                  {handoffStop && (
+                    <div className="flex items-center gap-2 text-xs bg-indigo-50 border border-indigo-100 rounded-lg px-2.5 py-1.5 text-indigo-800">
+                      <Truck size={13} className="flex-shrink-0" />
+                      <span className="flex-1 min-w-0 truncate">
+                        {driverNames[0] || 'Driver 1'} drops off here first
+                      </span>
+                      <button
+                        onClick={() => removeExtraStop(handoffStop.orderId)}
+                        className="flex-shrink-0 p-0.5 text-indigo-400 hover:text-red-500"
+                        title="Remove hand-off stop"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -418,7 +573,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
           </h3>
           <div className="flex gap-2">
             {[1, 2].map(n => (
-              <button key={n} onClick={() => setNumDrivers(n)}
+              <button key={n} onClick={() => { setNumDrivers(n); clearResults(); }}
                 className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${
                   numDrivers === n
                     ? 'border-blue-500 bg-blue-50 text-blue-700'
@@ -436,8 +591,8 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-gray-800 flex items-center gap-2">
               <PlusCircle size={16} className="text-gray-500" /> Additional Stops
-              {extraStops.length > 0 && (
-                <span className="text-xs font-normal text-gray-400">({extraStops.length})</span>
+              {manualStops.length > 0 && (
+                <span className="text-xs font-normal text-gray-400">({manualStops.length})</span>
               )}
             </h3>
             {!showAddStop && (
@@ -451,9 +606,9 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
           </div>
 
           {/* Existing extra stops */}
-          {extraStops.length > 0 && (
+          {manualStops.length > 0 && (
             <ul className="mt-3 space-y-1.5">
-              {extraStops.map(s => (
+              {manualStops.map(s => (
                 <li key={s.orderId} className="flex items-center gap-2 text-xs bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5">
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-gray-800 truncate">{s.customerName}</div>
@@ -551,7 +706,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         {/* Optimize button */}
         <button
           onClick={handleOptimize}
-          disabled={!depotCoords || !allOrders.length || optimizing}
+          disabled={!depotsReady || !allOrders.length || optimizing}
           className="w-full py-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-40 flex items-center justify-center gap-2 shadow-sm transition-all"
         >
           {optimizing
@@ -678,14 +833,17 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
                   {/* Stop list */}
                   <ol className="divide-y divide-gray-50">
-                    {route.stops.map((stop, idx) => (
-                      <li key={stop.order.orderId} className="flex items-center gap-2 px-4 py-2">
+                    {route.stops.map((stop, idx) => {
+                      const isPinned = handoffActive && !!stop.order.pinVehicle;
+                      return (
+                      <li key={stop.order.orderId} className={`flex items-center gap-2 px-4 py-2 ${isPinned ? 'bg-indigo-50/60' : ''}`}>
                         <span className="flex-shrink-0 w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center"
                           style={{ background: color }}>
                           {idx + 1}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-gray-800 truncate">
+                          <div className="text-xs font-medium text-gray-800 truncate flex items-center gap-1">
+                            {isPinned && <Truck size={11} className="flex-shrink-0 text-indigo-500" />}
                             {stop.order.customerName}
                           </div>
                           <div className="text-[10px] text-gray-500 truncate">
@@ -711,8 +869,9 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                             <ChevronDown size={13} />
                           </button>
                         </div>
-                        {/* Move to other driver button — only shown with 2 drivers */}
-                        {otherRoute && (
+                        {/* Move to other driver button — only shown with 2 drivers.
+                            The hand-off can't move: it IS the other driver's depot. */}
+                        {otherRoute && !isPinned && (
                           <button
                             onClick={() => moveStop(route.vehicleId, stop.order.orderId)}
                             className="flex-shrink-0 flex items-center gap-0.5 text-[10px] font-medium px-2 py-1 rounded border border-gray-200 hover:border-gray-400 hover:bg-gray-50 text-gray-500 transition-all"
@@ -724,7 +883,8 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                           </button>
                         )}
                       </li>
-                    ))}
+                      );
+                    })}
                   </ol>
                 </div>
               );
@@ -735,7 +895,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
       {/* Map */}
       <div className="flex-1" style={{ minHeight: '500px' }}>
-        <RouteMap depot={depotCoords} routes={routes} polylines={polylines} />
+        <RouteMap depots={activeDepots} routes={routes} polylines={polylines} />
       </div>
 
       {/* Driver view overlay */}
