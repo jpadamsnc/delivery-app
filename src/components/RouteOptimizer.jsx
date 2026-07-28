@@ -166,7 +166,9 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     setDepotCoordsList(prev => { const next = [...prev]; next[idx] = null; return next; });
     try {
       const coords = await geocodeAddress(address);
-      setDepotCoordsList(prev => { const next = [...prev]; next[idx] = coords;       return next; });
+      // Keep the typed address: when the geocoder only resolves to city level,
+      // it still beats the coarse fields for handing to Google Maps later.
+      setDepotCoordsList(prev => { const next = [...prev]; next[idx] = { ...coords, address }; return next; });
       setDepotLabels(prev    => { const next = [...prev]; next[idx] = coords.label; return next; });
       localStorage.setItem(DEPOT_STORAGE_KEYS[idx], address);
       clearResults(); // existing routes were built around the old depot
@@ -460,7 +462,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   const handleShareDriver = (route) => {
     const name     = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
     const farmName = localStorage.getItem('deliveryFarmName') || 'Fuster Cluck Farm';
-    const url      = encodeDriverLink(route, name, farmName);
+    const url      = encodeDriverLink(route, name, farmName, depotFor(route.vehicleId));
     navigator.clipboard.writeText(url).then(() => {
       setSharedDriverId(route.vehicleId);
       setTimeout(() => setSharedDriverId(null), 2500);
@@ -903,7 +905,12 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
         const route = displayRoutes.find(r => r.vehicleId === activeDriverView);
         const color = DRIVER_COLORS[(activeDriverView - 1) % DRIVER_COLORS.length];
         return route ? (
-          <DriverView route={route} driverColor={color} onClose={() => setActiveDriverView(null)} />
+          <DriverView
+            route={route}
+            driverColor={color}
+            depot={depotFor(activeDriverView)}
+            onClose={() => setActiveDriverView(null)}
+          />
         ) : null;
       })()}
     </div>

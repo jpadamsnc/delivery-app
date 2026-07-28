@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, CheckCircle, MessageSquare, Clock,
-  ChevronDown, ChevronUp, Settings, RotateCcw, Loader, Map,
+  ChevronDown, ChevronUp, Settings, RotateCcw, Loader, Map, Home,
 } from 'lucide-react';
 import { getDrivingTime } from '../utils/routeService';
 
@@ -183,7 +183,11 @@ const TemplateEditor = ({ farmName, etaTemplate, thanksTemplate, driverNames, on
 };
 
 // ─── Main Driver View ─────────────────────────────────────────────────────────
-const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
+const DriverView = ({ route, driverColor, onClose, overrideFarmName, depot: depotProp }) => {
+  // In-app the depot comes from the planner; over a shared link it rides in the
+  // payload. Links shared before per-driver depots existed simply have none.
+  const depot = depotProp || route.depot || null;
+
   // Stable key for this specific route so completed-stop state survives a page reload
   // (iOS Safari frequently reloads the tab after the driver leaves to send an SMS or open Maps).
   const routeKey = `${STORAGE_COMPLETED_PREFIX}${route.vehicleId}_${route.stops.map(s => s.order.orderId).join(',')}`;
@@ -216,6 +220,16 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
       `&destination=${addr(dest)}` +
       (stops.length > 1 ? `&waypoints=${stops.slice(0, -1).map(addr).join('|')}` : '') +
       `&travelmode=driving`;
+  })();
+
+  // Separate from the stop route: the drive back to this driver's own depot.
+  const depotUrl = (() => {
+    if (!depot) return null;
+    // Prefer the typed address — a coarse geocode would otherwise send her to
+    // the city centre instead of the actual driveway.
+    const geo  = [depot.street, depot.city, depot.state, depot.zip].filter(Boolean).join(', ');
+    const dest = depot.address || geo || `${depot.lat},${depot.lon}`;
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=driving`;
   })();
 
   const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t, driverNames: d }) => {
@@ -484,6 +498,19 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName }) => {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Trip home — the planner's totals include this leg, but the stop
+            route deliberately doesn't, so it stays opt-in. */}
+        {depotUrl && (
+          <a
+            href={depotUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-1.5 w-full py-3 rounded-xl border border-gray-300 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 active:bg-gray-100"
+          >
+            <Home size={15} /> Return to depot
+          </a>
         )}
 
         <div className="h-4" />

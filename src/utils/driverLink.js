@@ -23,13 +23,23 @@ function fromBase64Legacy(b64) {
   return new TextDecoder().decode(bytes);
 }
 
-export function encodeDriverLink(route, driverName, farmName) {
+export function encodeDriverLink(route, driverName, farmName, depot) {
   const payload = {
     v: 2,
     vehicleId: route.vehicleId,
     driverName,
     farmName,
     summary: route.summary,
+    // This driver's own start/end point, so the phone can offer a trip home.
+    depot: depot ? {
+      lat:     depot.lat,
+      lon:     depot.lon,
+      address: depot.address || '',   // as typed by the planner
+      street: depot.street || '',
+      city:   depot.city   || '',
+      state:  depot.state  || '',
+      zip:    depot.zip    || '',
+    } : null,
     stops: route.stops.map(s => ({
       orderId:      s.order.orderId,
       customerName: s.order.customerName,
@@ -72,6 +82,7 @@ export function decodeDriverHash(hash) {
       driverName: data.driverName,
       farmName:   data.farmName,
       summary:    data.summary,
+      depot:      data.depot || null,   // absent in links shared before depots were per-driver
       stops: data.stops.map(s => ({
         order:   s,
         stopNum: null,

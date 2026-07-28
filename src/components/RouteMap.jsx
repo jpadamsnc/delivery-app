@@ -81,7 +81,11 @@ const RouteMap = ({ depots, routes, polylines }) => {
       const title = shared || depotList.length === 1
         ? 'Depot / Start & End'
         : `Driver ${driverNums[0]} — Start & End`;
-      const marker = L.marker([lat, lon], { icon: makeDepotIcon(color) })
+      // Keep depots above stop markers. A depot regularly shares coordinates
+      // with a stop — the hand-off sits exactly on Driver 2's depot — and
+      // Leaflet ranks equal latitudes by insertion order, so without this the
+      // stop drawn later would hide the depot entirely.
+      const marker = L.marker([lat, lon], { icon: makeDepotIcon(color), zIndexOffset: 1000 })
         .bindPopup(`<b>${title}</b>`)
         .addTo(map);
       layersRef.current.push(marker);
