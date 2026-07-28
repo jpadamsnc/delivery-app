@@ -5,6 +5,7 @@ import {
   ChevronDown, ChevronUp, Settings, RotateCcw, Loader, Map, Home,
 } from 'lucide-react';
 import { getDrivingTime } from '../utils/routeService';
+import { addressText, googleDirectionsUrl } from '../utils/mapsLink';
 
 // ─── Default message templates ──────────────────────────────────────────────
 // Available placeholders:
@@ -209,28 +210,21 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName, depot: depo
 
   const driverName = route.driverName || driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
 
-  // Google Maps link for the full route — use street addresses so Google's own
-  // geocoder resolves them accurately (Barn2Door lat/lon can be off by a house or two).
+  // Google Maps link for the full route. Origin is left off so it starts from
+  // wherever the driver actually is.
   const mapsUrl = (() => {
-    const stops = route.stops.filter(s => s.order?.street);
+    const stops = route.stops.map(s => addressText(s.order)).filter(Boolean);
     if (!stops.length) return null;
-    const addr = s => encodeURIComponent(`${s.order.street}, ${s.order.city}, ${s.order.state} ${s.order.zip}`);
-    const dest = stops[stops.length - 1];
-    return `https://www.google.com/maps/dir/?api=1` +
-      `&destination=${addr(dest)}` +
-      (stops.length > 1 ? `&waypoints=${stops.slice(0, -1).map(addr).join('|')}` : '') +
-      `&travelmode=driving`;
+    return googleDirectionsUrl({
+      destination: stops[stops.length - 1],
+      waypoints:   stops.slice(0, -1),
+    });
   })();
 
   // Separate from the stop route: the drive back to this driver's own depot.
-  const depotUrl = (() => {
-    if (!depot) return null;
-    // Prefer the typed address — a coarse geocode would otherwise send her to
-    // the city centre instead of the actual driveway.
-    const geo  = [depot.street, depot.city, depot.state, depot.zip].filter(Boolean).join(', ');
-    const dest = depot.address || geo || `${depot.lat},${depot.lon}`;
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=driving`;
-  })();
+  const depotUrl = depot
+    ? googleDirectionsUrl({ destination: addressText(depot) })
+    : null;
 
   const handleSaveTemplates = ({ farmName: f, etaTemplate: e, thanksTemplate: t, driverNames: d }) => {
     setFarmName(f);        localStorage.setItem(STORAGE_FARM,    f);
@@ -387,7 +381,7 @@ const DriverView = ({ route, driverColor, onClose, overrideFarmName, depot: depo
                   onClick={() => setExpandedId(isExpanded ? null : order.orderId)}
                 >
                   <div className="font-bold text-gray-900 text-base leading-tight">{order.customerName}</div>
-                  <div className="text-sm text-gray-500 mt-0.5">{order.street}</div>
+                  <div className="text-sm text-gray-500 mt-0.5">{order.street || order.address}</div>
                   <div className="text-sm text-gray-500">{order.city}, {order.state} {order.zip}</div>
                   {order.phone && (
                     <div className="text-sm font-semibold text-gray-700 mt-0.5">{order.phone}</div>

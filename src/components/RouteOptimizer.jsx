@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { geocodeAddress, autocompleteAddress, geocodeCensus, optimizeRoute, getRouteDetails } from '../utils/routeService';
 import { encodeDriverLink } from '../utils/driverLink';
+import { addressText, shortAddress, googleDirectionsUrl } from '../utils/mapsLink';
 import RouteMap from './RouteMap';
 import DriverView, { getDriverName } from './DriverView';
 
@@ -279,13 +280,16 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       customerName: `Hand-off to ${name}`,
       phone:        '',
       deliveryNote: `Transfer ${name}'s orders here`,
-      street: depot.street || depotAddresses[1],
-      city:   depot.city,
-      state:  depot.state,
-      zip:    depot.zip,
-      lat:    depot.lat,
-      lon:    depot.lon,
-      items:  [],
+      // Mirror the depot's own fields rather than flattening the typed address
+      // into `street` — that would repeat the city and confuse Google's lookup.
+      address: depot.address || depotAddresses[1],
+      street:  depot.street,
+      city:    depot.city,
+      state:   depot.state,
+      zip:     depot.zip,
+      lat:     depot.lat,
+      lon:     depot.lon,
+      items:   [],
     };
     setExtraStops(prev => persistExtraStops([...prev.filter(s => !s.pinVehicle), stop]));
     clearResults();
@@ -438,15 +442,16 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
 
   // ── Action buttons ────────────────────────────────────────────────────────
   const handleCopyRoute = (route) => {
-    const depot = depotFor(route.vehicleId);
-    const waypoints = route.stops.slice(0, 8).map(s => `${s.order.lat},${s.order.lon}`).join('|');
-    const mapsUrl =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${depot.lat},${depot.lon}` +
-      `&destination=${depot.lat},${depot.lon}` +
-      `&waypoints=${waypoints}&travelmode=driving`;
+    const depot     = depotFor(route.vehicleId);
+    const depotAddr = addressText(depot);
+    const mapsUrl   = googleDirectionsUrl({
+      origin:      depotAddr,
+      destination: depotAddr,
+      // Google caps a directions URL at 9 waypoints.
+      waypoints:   route.stops.slice(0, 8).map(s => addressText(s.order)).filter(Boolean),
+    });
     const stopLines = route.stops
-      .map((s, i) => `${i + 1}. ${s.order.customerName} — ${s.order.street}, ${s.order.city}`)
+      .map((s, i) => `${i + 1}. ${s.order.customerName} — ${shortAddress(s.order)}`)
       .join('\n');
     const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
     const message =
@@ -614,7 +619,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                 <li key={s.orderId} className="flex items-center gap-2 text-xs bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5">
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-gray-800 truncate">{s.customerName}</div>
-                    <div className="text-[10px] text-gray-500 truncate">{s.street}, {s.city}</div>
+                    <div className="text-[10px] text-gray-500 truncate">{shortAddress(s)}</div>
                   </div>
                   <button
                     onClick={() => removeExtraStop(s.orderId)}
@@ -849,7 +854,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
                             {stop.order.customerName}
                           </div>
                           <div className="text-[10px] text-gray-500 truncate">
-                            {stop.order.street}, {stop.order.city}
+                            {shortAddress(stop.order)}
                           </div>
                         </div>
                         {/* Reorder within this driver's route */}
