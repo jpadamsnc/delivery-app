@@ -441,6 +441,19 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
   };
 
   // ── Action buttons ────────────────────────────────────────────────────────
+  // Readable header + numbered stops. Both copy buttons lead with this, so a
+  // driver can see the run at a glance before opening whichever link follows.
+  const routeSummaryText = (route) => {
+    const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
+    const header =
+      `${driverName} — ${route.stops.length} stop${route.stops.length !== 1 ? 's' : ''}` +
+      ` (${formatDistance(route.summary.distance)} / ${formatDuration(route.summary.duration)})`;
+    const stopLines = route.stops
+      .map((s, i) => `${i + 1}. ${s.order.customerName} — ${shortAddress(s.order)}`)
+      .join('\n');
+    return `${header}\n\n${stopLines}`;
+  };
+
   const handleCopyRoute = (route) => {
     const depot     = depotFor(route.vehicleId);
     const depotAddr = addressText(depot);
@@ -450,14 +463,7 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
       // Google caps a directions URL at 9 waypoints.
       waypoints:   route.stops.slice(0, 8).map(s => addressText(s.order)).filter(Boolean),
     });
-    const stopLines = route.stops
-      .map((s, i) => `${i + 1}. ${s.order.customerName} — ${shortAddress(s.order)}`)
-      .join('\n');
-    const driverName = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
-    const message =
-      `${driverName} — ${route.stops.length} stop${route.stops.length !== 1 ? 's' : ''}` +
-      ` (${formatDistance(route.summary.distance)} / ${formatDuration(route.summary.duration)})\n\n` +
-      `${stopLines}\n\nNavigate all stops:\n${mapsUrl}`;
+    const message = `${routeSummaryText(route)}\n\nNavigate all stops:\n${mapsUrl}`;
     navigator.clipboard.writeText(message).then(() => {
       setCopiedDriverId(route.vehicleId);
       setTimeout(() => setCopiedDriverId(null), 2500);
@@ -468,7 +474,8 @@ const RouteOptimizer = ({ labelData, onPrintLabels }) => {
     const name     = driverNames[route.vehicleId - 1] || `Driver ${route.vehicleId}`;
     const farmName = localStorage.getItem('deliveryFarmName') || 'Fuster Cluck Farm';
     const url      = encodeDriverLink(route, name, farmName, depotFor(route.vehicleId));
-    navigator.clipboard.writeText(url).then(() => {
+    const message  = `${routeSummaryText(route)}\n\nOpen your route:\n${url}`;
+    navigator.clipboard.writeText(message).then(() => {
       setSharedDriverId(route.vehicleId);
       setTimeout(() => setSharedDriverId(null), 2500);
     });
